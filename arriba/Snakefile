@@ -1,0 +1,62 @@
+from os.path import join
+import pandas as pd
+from collections import defaultdict
+import yaml
+
+configfile:'snakemake_config.yaml'
+
+index_dir=config["index_dir"]
+fastq_dir=config["fastq_dir"]
+output_dir=config["output_dir"]
+
+assembly_dir=config["assembly_dir"]
+anno_dir=config["anno_dir"]
+blacklist_dir=config["blacklist_dir"]
+sample_list_dir=config["sample_list"]
+
+sample_df = pd.read_csv(sample_list_dir,sep="\t")
+sample_list = sample_df['sample_names'].tolist()
+
+rule all:
+    input:
+        expand(join(fastq_dir,'{sample}.R1.fastq.gz'),sample=sample_list),
+        expand(join(fastq_dir,'{sample}.R2.fastq.gz'),sample=sample_list),
+        expand(join(fastq_dir,'{sample}.star.bam'),sample=sample_list),
+
+rule star_and_arriba:
+    """
+    -k /path/to/known_fusions.tsv.gz -t /path/to/known_fusions.tsv.gz -p /path/to/protein_domains.gff3
+    """
+    input:
+        r1 = join(fastq_dir,'{sample}.R1.fastq.gz'),
+        r2 = join(fastq_dir,'{sample}.R2.fastq.gz')
+    params:
+        batch = '--cpus-per-task=32 --mem=110g --time=48:00:00',
+        index = index_dir,
+        base = join(output_dir,'{sample}.star'),
+        assembly = assembly_dir,
+        anno = anno_dir,
+        bl = blacklist_dir,
+        rname = "star"
+    output:
+        bam = join(fastq_dir,'{sample}.star.bam'),
+        fusion = join(fastq_dir,'{sample}_fusions.tsv'),
+        fusiond = join(fastq_dir,'{sample}_fusions_discarded.tsv')
+    shell:
+        """
+        module load STAR; module load arriba;
+        STAR \
+        --runThreadN 8 \
+        --genomeDir {params.index} --genomeLoad NoSharedMemory \
+        --readFilesIn {input.r1} {input.r2} --readFilesCommand zcat \
+        --outFileNamePrefix {params.base} \
+        --outStd BAM_Unsorted --outSAMtype BAM Unsorted --outSAMunmapped Within --outBAMcompression 0 \
+        --outFilterMultimapNmax 50 --peOverlapNbasesMin 10 --alignSplicedMateMapLminOverLmate 0.5 --alignSJstitchMismatchNmax 5 -1 5 5 \
+        --chimSegmentMin 10 --chimOutType WithinBAM HardClip --chimJunctionOverhangMin 10 --chimScoreDropMax 30 \
+        --chimScoreJunctionNonGTAG 0 --chimScoreSeparation 1 --chimSegmentReadGapMax 3 --chimMultimapNmax 50  |
+        arriba \
+            -x $0 \
+            -o {output.fusion} -O {output.fusiond} \
+            -a {params.assembly} -g {params.anno} \
+            -b {params.bl}
+        """
