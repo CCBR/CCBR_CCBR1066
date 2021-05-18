@@ -1,0 +1,324 @@
+---
+title: "CCBR-1066 Primary Analysis"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+analysis_dir ="/Volumes/projects/ccbr1066/analysis/"
+```
+
+#Import deg for fc and fdr
+```{r}
+#read in DEG cvs file
+deg_df = read.csv(paste(analysis_dir,"deg_data/merged_deg_limma_012021.txt",sep=""),sep="\t")
+colnames(deg_df)
+```
+
+#Compare KO differences
+```{r}
+library(VennDiagram)
+library(scales)
+library(dplyr)
+compare_list = c("Y318A.KO","WT.KO","Mock.KO")
+lev = 1
+for (c_variable in compare_list){
+  fdr_variable = paste(c_variable,".fdr",sep="")
+  fc_variable = paste(c_variable,".fc",sep="")
+
+  name_up = paste("gene_up",lev,sep="")
+  name_down = paste("gene_down",lev,sep="")
+  
+  assign(name_up,(subset(deg_df, 
+                                 get(fdr_variable) <= 0.05 & get(fc_variable) < -1.5)$gene)) #positive = KO upregulated
+  assign(name_down, (subset(deg_df, 
+                                 get(fdr_variable) <= 0.05 & get(fc_variable) > 1.5)$gene)) #negative = upregulated over KO
+  
+  lev=lev+1
+}
+
+for (num in 1:length(compare_list)){
+  print(paste(compare_list[num], " - "))
+  print(paste("--UP: ",length(get(paste("gene_up",num,sep="")))))
+  print(paste("--DOWN: ",length(get(paste("gene_down",num,sep="")))))
+}
+
+# ven for upreglated KO, downregulated comparison
+file_save = (paste(analysis_dir,"venn_up.png",sep=""))
+venn.diagram(
+  x = list(gene_up1, gene_up2, gene_up3),
+  category.names = c("Y318A" , "WT" , "Mock"),
+  filename = file_save,
+  output = TRUE ,
+          imagetype="png" ,
+          height = 480 , 
+          width = 480 , 
+          resolution = 300,
+          compression = "lzw",
+          lwd = 1,
+          col=c("#440154ff", '#21908dff', '#fde725ff'),
+          fill = c(alpha("#440154ff",0.3), alpha('#21908dff',0.3), alpha('#fde725ff',0.3)),
+          cex = 0.5,
+          fontfamily = "sans",
+          cat.cex = 0.3,
+          cat.default.pos = "outer",
+          cat.pos = c(-27, 27, 135),
+          cat.dist = c(0.055, 0.055, 0.085),
+          cat.fontfamily = "sans",
+          cat.col = c("#440154ff", '#21908dff', '#fde725ff'),
+          rotation = 1
+        )
+
+file_save = (paste(analysis_dir,"venn_down.png",sep=""))
+venn.diagram(
+  x = list(gene_down1, gene_down2, gene_down3),
+  category.names = c("Y318A" , "WT" , "Mock"),
+  filename = file_save,
+  output = TRUE ,
+          imagetype="png" ,
+          height = 480 , 
+          width = 480 , 
+          resolution = 300,
+          compression = "lzw",
+          lwd = 1,
+          col=c("#440154ff", '#21908dff', '#fde725ff'),
+          fill = c(alpha("#440154ff",0.3), alpha('#21908dff',0.3), alpha('#fde725ff',0.3)),
+          cex = 0.5,
+          fontfamily = "sans",
+          cat.cex = 0.3,
+          cat.default.pos = "outer",
+          cat.pos = c(-27, 27, 135),
+          cat.dist = c(0.055, 0.055, 0.085),
+          cat.fontfamily = "sans",
+          cat.col = c("#440154ff", '#21908dff', '#fde725ff'),
+          rotation = 1
+        )
+```
+
+GO Analysis of overlapping genes
+```{r}
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(tidyverse)
+library(enrichplot)
+library(UniProt.ws)
+library(tm)
+library(wordcloud)
+
+#visualizations
+GOVisuals<-function(obj.in,file.in){
+  #create barplot
+  p = barplot(obj.in, 
+          drop = TRUE, 
+          showCategory = 10, 
+          title = "GO Biological Pathways",
+          font.size = 8)
+  print(p)
+  ggsave(paste(file.in,".barplot.jpg",sep=""),p)
+  
+  #create cneplot
+  p = cnetplot(obj.in, categorySize="pvalue")
+  print(p)
+  ggsave(paste(file.in,".cneplot.jpg",sep=""),p)
+
+  #create emapplot
+  p = emapplot(pairwise_termsim(obj.in))
+  print(p)
+  ggsave(paste(file.in,".emaplot.jpg",sep=""),p)
+
+  #subcellular plot
+  humanUp = UniProt.ws(9606)
+  df.subcell = select(humanUp,
+                    keys=obj.in@gene,
+                    columns=c("SUBCELLULAR-LOCATIONS","PATHWAY"),
+                    keytype = "ENSEMBL")
+  
+  CreateWordCloud(df.subcell,file.in)
+}
+
+CreateWordCloud<-function(df.subcell,file.save){
+  str.list = df.subcell$`SUBCELLULAR-LOCATIONS`[!(is.na(df.subcell$`SUBCELLULAR-LOCATIONS`))]
+  
+  remove.list = c("SUBCELLULAR LOCATION","[[:punct:]]",
+                                      "ECO[0-9]*[|][A-Za-z]*[0-9]",
+                                      "Note=","ECO[0-9]*","[0-9]*",
+                                      " and "," [tT]he "," in ","PubMed", " with ")
+  for (items in remove.list){
+    str.list=str_remove_all(str.list,items)
+  }
+  list.final = stripWhitespace(str.list)
+  dtm <- TermDocumentMatrix(Corpus(VectorSource(list.final)))
+  v <- sort(rowSums(as.matrix(dtm)),decreasing=TRUE)
+  d <- data.frame(word = names(v),freq=v)
+
+  #save wordcloud and histogram counts
+  png(file=paste(file.save,".wordcloud.jpg",sep=""))
+  par(mfrow=c(1,2),oma=c(0,0,4,0))
+  par(cex=.7)
+  wordcloud(list.final,colors=brewer.pal(8,"Dark2"),max.words = 25)
+  par(fig=c(.5,1,.2,.7), new=TRUE)
+  barplot(d[1:10,]$freq, las = 2, names.arg = d[1:10,]$word,
+          col = "light blue", ylab = "Word frequencies")
+  mtext("Sub-Cellular distribution",outer=TRUE, cex=2)
+  dev.off()
+}
+
+#generate eid list
+gene_list = gene_up3[gene_up3 %in% gene_up1[gene_up1 %in% gene_up2]]
+gene_EID = as.character(lapply(gene_list,function(x){strsplit(x,".",fixed=TRUE)[[1]][[1]]}))
+
+#create gene df
+gene_df <- bitr(gene_EID, fromType = "ENSEMBL",
+                  toType = c("ENSEMBL", "SYMBOL"),
+                  OrgDb = org.Hs.eg.db)
+  
+#functional test
+g.functional <- groupGO(gene = gene_EID, OrgDb = org.Hs.eg.db,
+                   keyType  = "ENSEMBL", ont = "CC",
+                   level    = 2, readable = TRUE)
+  
+#over-representation test
+ego <- enrichGO(gene          = gene_EID,
+                  keyType       = "ENSEMBL",
+                  OrgDb         = org.Hs.eg.db,
+                  ont           = "CC", pAdjustMethod = "BH",
+                  pvalueCutoff  = 0.05, qvalueCutoff  = 0.05, readable = TRUE)
+
+#visuals
+if(length(ego$pvalue)>1){
+    GOVisuals(ego,paste(analysis_dir,"go.up."))
+}  else{
+    print(paste("The analysis contained no significant genes that were over-represented"))
+}
+
+#generate eid list
+gene_list = gene_down3[gene_down3 %in% gene_down1[gene_down1 %in% gene_down2]]
+gene_EID = as.character(lapply(gene_list,function(x){strsplit(x,".",fixed=TRUE)[[1]][[1]]}))
+  
+#create gene df
+gene_df <- bitr(gene_EID, fromType = "ENSEMBL",
+                  toType = c("ENSEMBL", "SYMBOL"),
+                  OrgDb = org.Hs.eg.db)
+  
+#functional test
+g.functional <- groupGO(gene = gene_EID, OrgDb = org.Hs.eg.db,
+                   keyType  = "ENSEMBL", ont = "CC",
+                   level    = 2, readable = TRUE)
+  
+#over-representation test
+ego <- enrichGO(gene          = gene_EID,
+                  keyType       = "ENSEMBL",
+                  OrgDb         = org.Hs.eg.db,
+                  ont           = "CC", pAdjustMethod = "BH",
+                  pvalueCutoff  = 0.05, qvalueCutoff  = 0.05, readable = TRUE)
+
+#visuals
+if(length(ego$pvalue)>1){
+    GOVisuals(ego,paste(analysis_dir,"go.down."))
+}  else{
+    print(paste("The analysis contained no significant genes that were over-represented"))
+}
+
+```
+
+#output requested gene lists
+```{r}
+#output overlap lists overlap in WT/MOCK not found in Y318A - DOWN REGULATED
+joined_list = gene_down2[gene_down2 %in% gene_down3]
+gene_list = joined_list[!(joined_list %in% gene_down1)]
+gene_EID = as.character(lapply(gene_list,function(x){strsplit(x,".",fixed=TRUE)[[1]][[1]]}))
+
+#create gene df
+gene_df <- bitr(gene_EID, fromType = "ENSEMBL",
+                  toType = c("ENSEMBL", "SYMBOL"),
+                  OrgDb = org.Hs.eg.db)
+rownames(gene_df) = gene_df$ENSEMBL
+
+#review missing eid's, backfill
+pos=1
+missing_symbols = c("AGGF1P1","ZNRF2P2","AC004231.1","AC012651.1","AL049775.3","LUNAR1","AC006504.7")
+for (missing_id in gene_EID[!(gene_EID %in% gene_df$ENSEMBL)]){
+  gene_df[missing_id,"SYMBOL"] = missing_symbols[pos]
+  gene_df[missing_id,"ENSEMBL"] = missing_id
+  pos=pos+1
+}
+gene_list_complete = gene_df
+write.csv(gene_df,paste(analysis_dir,"wtmockoverlap_genelist_down.csv"),row.names = FALSE)
+
+#output overlap lists overlap in WT/MOCK not found in Y318A - UP REGULATED
+joined_list = gene_up2[gene_up2 %in% gene_up3]
+gene_list = joined_list[!(joined_list %in% gene_up1)]
+gene_EID = as.character(lapply(gene_list,function(x){strsplit(x,".",fixed=TRUE)[[1]][[1]]}))
+
+#create gene df
+gene_df <- bitr(gene_EID, fromType = "ENSEMBL",
+                  toType = c("ENSEMBL", "SYMBOL"),
+                  OrgDb = org.Hs.eg.db)
+#remove row of old gene name
+gene_df = subset(gene_df,SYMBOL != "LINC02677")
+rownames(gene_df) = gene_df$ENSEMBL
+
+#review missing eid's, backfill
+pos=1
+missing_symbols = c("AC092490.1","AC087190.3","NA - retired","AL354714.2")
+for (missing_id in gene_EID[!(gene_EID %in% gene_df$ENSEMBL)]){
+  gene_df[missing_id,"ENSEMBL"] = missing_id
+  gene_df[missing_id,"SYMBOL"] = missing_symbols[pos]
+  pos=pos+1
+}
+gene_list_complete = rbind(gene_list_complete,gene_df)
+write.csv(gene_df,paste(analysis_dir,"wtmockoverlap_genelist_up.csv"),row.names= FALSE)
+```
+
+#pathway analysis of Mock up regulation, WT up regulation, Y318A down regulation with KO as baseline
+```{r}
+library(pathview)
+
+filename=system.file("extdata/gse16873.demo", package = "pathview")
+gse16873=read.delim(filename, row.names=1)
+gse16873.d=gse16873[,2*(1:6)]-gse16873[,2*(1:6)-1]
+data(gse16873.d)
+
+data(demo.paths)
+head(demo.paths)
+
+data(paths.hsa)
+head(paths.hsa,3)
+
+i <- 1
+#standard graph output
+pv.out <- pathview(gene.data = gse16873.d[, 1], pathway.id = demo.paths$sel.paths[i],
+                   species = "hsa", out.suffix = "gse16873", kegg.native = T)
+list.files(pattern="hsa04110", full.names=T)
+
+head(pv.out$plot.data.gene)
+
+#gene names in graph
+pv.out <- pathview(gene.data = gse16873.d[, 1], pathway.id = demo.paths$sel.paths[i],
+                     species = "hsa", out.suffix = "gse16873.2layer", kegg.native = T,
+                     same.layer = F)
+
+#additional pathway analysis
+pv.out <- pathview(gene.data = gse16873.d[, 1], pathway.id = demo.paths$sel.paths[i],
+                   species = "hsa", out.suffix = "gse16873.3", kegg.native = F,
+                   sign.pos = demo.paths$spos[i])
+
+dim(pv.out$plot.data.gene)
+
+#output for pathview analysis
+pathview_df = deg_df
+pathview_df$Eid = gene_EID = as.character(lapply(deg_df$gene,function(x){strsplit(x,".",fixed=TRUE)[[1]][[1]]}))
+pathview_df=subset(pathview_df,Eid %in% gene_list_complete$ENSEMBL)
+for (i in 1:nrow(pathview_df)){
+  pathview_df[i,"SYMBOL"] = gene_list_complete[pathview_df[i,"Eid"],"SYMBOL"]
+}
+
+#check rows are the same
+nrow(pathview_df) == nrow(gene_list_complete)
+
+#write out WT.KO, Mock.KO, Y318A.KO
+write.table(pathview_df[,c("SYMBOL","WT.KO.fc","Mock.KO.fc","Y318A.KO.fc")],"pathview_input.txt",sep="\t",row.names = FALSE)
+
+```
+

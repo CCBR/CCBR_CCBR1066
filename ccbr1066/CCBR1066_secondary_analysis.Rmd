@@ -1,0 +1,151 @@
+---
+title: "CCBR1066 Secondary Analysis"
+author: "Samantha Sevilla"
+date: "4/30/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+analysis_dir ="/Volumes/projects-1/ccbr1066/analysis/"
+analysis_dir ="analysis/"
+
+```
+
+# Import deg
+```{r}
+#read in DEG cvs file
+deg_df = read.csv(paste(analysis_dir,"deg_data/merged_deg_gsea_limma_04302021.txt",sep=""),sep="\t")
+colnames(deg_df)
+```
+
+#  
+```{r}
+library(DOSE)
+library(enrichplot)
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+
+#Create gene list, filtered by >2  
+create_gene_list <- function(comparison_name){
+  
+  # create gene list - assume that 1st column is ID, 2nd column is fold change
+  d <- deg_df[,c("gene", paste0(comparison_name,".gsea"))]
+  
+  #split ensemblid
+  d$eid = as.character(lapply(d$gene,function(x){strsplit(x,".",fixed=TRUE)[[1]][[1]]}))
+  
+  #convert to entrezeid
+  d$entrez = mapIds(org.Hs.eg.db,
+                      keys=d$eid, #Column containing Ensembl gene ids
+                      column="ENTREZID",
+                      keytype="ENSEMBL",
+                      multiVals="first")
+  
+  ## feature 1: numeric vector
+  geneList <- d[,paste0(comparison_name,".gsea")]
+  
+  ## feature 2: named vector
+  names(geneList) <- as.character(d[,"entrez"])
+  
+  ## feature 3: decreasing order
+  geneList <- sort(geneList, decreasing = TRUE)
+  
+  return(geneList)
+}
+
+#run enrichment analysis
+enrichment_analysis <- function(geneList){
+  #test
+  geneList=gene_list
+  
+  #filter
+  de <- names(geneList)[abs(geneList) > 2]
+  
+  #enrich - mapping with entrez id
+  #https://rdrr.io/github/GuangchuangYu/DOSE/man/enrichDGN.html
+  edo <- enrichDGN(de)
+  
+  #barplot
+  barplot(edo, showCategory=20)  
+
+  #dotplot
+  edo2 <- gseNCG(geneList)
+  p1 <- dotplot(edo, showCategory=30) + ggtitle("dotplot for ORA")
+  p2 <- dotplot(edo2, showCategory=30) + ggtitle("dotplot for GSEA")
+  plot_grid(p1, p2, ncol=2)
+
+  #gene concept network
+  edox <- setReadable(edo, 'org.Hs.eg.db', 'ENTREZID')
+  p1 <- cnetplot(edox, foldChange=geneList)
+  p2 <- cnetplot(edox, categorySize="pvalue", foldChange=geneList) ## categorySize can be scaled by 'pvalue' or 'geneNum'
+  p3 <- cnetplot(edox, foldChange=geneList, circular = TRUE, colorEdge = TRUE)
+  cowplot::plot_grid(p1, p2, p3, ncol=3, labels=LETTERS[1:3], rel_widths=c(.8, .8, 1.2))
+  
+  p1 <- cnetplot(edox, node_label="category") 
+  p2 <- cnetplot(edox, node_label="gene") 
+  p3 <- cnetplot(edox, node_label="all") 
+  p4 <- cnetplot(edox, node_label="none") 
+  cowplot::plot_grid(p1, p2, p3, p4, ncol=2, labels=LETTERS[1:4])
+}
+
+################################################################################
+# MAIN CODE
+################################################################################
+#generate gene list
+gene_list = create_gene_list("Mock.KO")
+
+#enrichment analysis
+enrichment_analysis(gene_list)
+
+```
+
+Review pathview gene lists
+```{r}
+library(VennDiagram)
+
+#read gene list for ox phos
+path_df = read.csv(paste0(analysis_dir,"pathview_output/complete_mock:wt,y318A/genedata.hsa00190.tsv"),sep="\t")
+head(path_df)
+print(paste0("The number of genes/complexes in list is ",nrow(path_df)))
+print(paste0("The number of genes/complexes downregulated is ",nrow(subset(path_df,mol.col=="#00FF00"))))
+print(paste0("The number of genes/complexes upregulated is ",nrow(subset(path_df,mol.col=="#FF0000" | mol.col=="#DE9E9E"))))
+print(paste0("The number of genes/complexes not diff is ",nrow(subset(path_df,mol.col=="#D3D3D3"))))
+print(paste0("The number of genes/complexes missing info ",nrow(subset(path_df,mol.col=="#FFFFFF"))))
+
+## gene list
+gene_oxphos = unique(path_df$labels)
+
+#read gene list for proteasome
+path_df = read.csv(paste0(analysis_dir,"pathview_output/complete_mock:wt,y318A_proteasome/genedata.hsa03050.tsv"),sep="\t")
+print(paste0("The number of genes/complexes in list is ",nrow(path_df)))
+print(paste0("The number of genes/complexes downregulated is ",nrow(subset(path_df,mol.col=="#00FF00"))))
+print(paste0("The number of genes/complexes upregulated is ",nrow(subset(path_df,mol.col=="#FF0000" | mol.col=="#DE9E9E"))))
+print(paste0("The number of genes/complexes not diff is ",nrow(subset(path_df,mol.col=="#D3D3D3"))))
+print(paste0("The number of genes/complexes missing info ",nrow(subset(path_df,mol.col=="#FFFFFF"))))
+gene_prot = unique(path_df$labels)
+
+#comparison
+GenerateVennD <- function(list1,list2,list.names,list.cols,title.in,fname){
+  
+  venn.diagram(
+    #create venn
+    x=list(list1,list2),
+    category.names = list.names,
+    fill=list.cols,
+    
+    #title
+    main=title.in,
+    main.cex = 2,
+    
+    #output
+    filename = fname,
+    output=TRUE,
+  )
+}
+file_save = (paste(analysis_dir,"images/venn_genes_pathview.png",sep=""))
+color.list =  c("light blue", "pink")
+GenerateVennD(gene_oxphos,gene_prot,c("Ox Phos","Proteasome"),color.list,"KEGG Gene Comparison", file_save)
+```
+
