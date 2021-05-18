@@ -1,107 +1,396 @@
 ---
-title: "CCBR1066 Secondary Analysis"
-author: "Samantha Sevilla"
-date: "4/30/2021"
-output: html_document
+title: "R Notebook"
+output: html_notebook
 editor_options: 
   chunk_output_type: console
 ---
+# Code info
+Runs GSEA and ORA with Pipeliner Output for Human data
+Developed from code by Skyler Kuhn
 
-```{r setup, include=FALSE}
-analysis_dir ="/Volumes/projects-1/ccbr1066/analysis/"
-analysis_dir ="analysis/"
-
+```{r}
+suppressMessages(library(dplyr))
+suppressMessages(library(RColorBrewer))
+suppressMessages(library(pheatmap))
+suppressMessages(library(clusterProfiler))
+suppressMessages(library(org.Hs.eg.db))
+suppressMessages(library(ReactomePA))
+suppressMessages(library(ggplot2))
+suppressMessages(library(enrichplot))
 ```
 
-# Import deg
+######################################################################
+# Functions
+######################################################################
+# Format output
 ```{r}
-#read in DEG cvs file
-deg_df = read.csv(paste(analysis_dir,"deg_data/merged_deg_gsea_limma_04302021.txt",sep=""),sep="\t")
-colnames(deg_df)
-```
-
-#  
-```{r}
-library(DOSE)
-library(enrichplot)
-library("AnnotationDbi")
-library("org.Hs.eg.db")
-
-#Create gene list, filtered by >2  
-create_gene_list <- function(comparison_name){
-  
-  # create gene list - assume that 1st column is ID, 2nd column is fold change
-  d <- deg_df[,c("gene", paste0(comparison_name,".gsea"))]
-  
-  #split ensemblid
-  d$eid = as.character(lapply(d$gene,function(x){strsplit(x,".",fixed=TRUE)[[1]][[1]]}))
-  
-  #convert to entrezeid
-  d$entrez = mapIds(org.Hs.eg.db,
-                      keys=d$eid, #Column containing Ensembl gene ids
-                      column="ENTREZID",
-                      keytype="ENSEMBL",
-                      multiVals="first")
-  
-  ## feature 1: numeric vector
-  geneList <- d[,paste0(comparison_name,".gsea")]
-  
-  ## feature 2: named vector
-  names(geneList) <- as.character(d[,"entrez"])
-  
-  ## feature 3: decreasing order
-  geneList <- sort(geneList, decreasing = TRUE)
-  
-  return(geneList)
+# Saves image as pdf (requested format)
+create_pdf <- function(image, filename, x, y) {
+  "Saves an image as a pdf"
+  pdf(filename, width=x, height=y)
+  image
+  dev.off()
+  return()
 }
 
-#run enrichment analysis
-enrichment_analysis <- function(geneList){
-  #test
-  geneList=gene_list
-  
-  #filter
-  de <- names(geneList)[abs(geneList) > 2]
-  
-  #enrich - mapping with entrez id
-  #https://rdrr.io/github/GuangchuangYu/DOSE/man/enrichDGN.html
-  edo <- enrichDGN(de)
-  
-  #barplot
-  barplot(edo, showCategory=20)  
-
-  #dotplot
-  edo2 <- gseNCG(geneList)
-  p1 <- dotplot(edo, showCategory=30) + ggtitle("dotplot for ORA")
-  p2 <- dotplot(edo2, showCategory=30) + ggtitle("dotplot for GSEA")
-  plot_grid(p1, p2, ncol=2)
-
-  #gene concept network
-  edox <- setReadable(edo, 'org.Hs.eg.db', 'ENTREZID')
-  p1 <- cnetplot(edox, foldChange=geneList)
-  p2 <- cnetplot(edox, categorySize="pvalue", foldChange=geneList) ## categorySize can be scaled by 'pvalue' or 'geneNum'
-  p3 <- cnetplot(edox, foldChange=geneList, circular = TRUE, colorEdge = TRUE)
-  cowplot::plot_grid(p1, p2, p3, ncol=3, labels=LETTERS[1:3], rel_widths=c(.8, .8, 1.2))
-  
-  p1 <- cnetplot(edox, node_label="category") 
-  p2 <- cnetplot(edox, node_label="gene") 
-  p3 <- cnetplot(edox, node_label="all") 
-  p4 <- cnetplot(edox, node_label="none") 
-  cowplot::plot_grid(p1, p2, p3, p4, ncol=2, labels=LETTERS[1:4])
+# Basic wrapper for write.table() function, add logic to take a list of df as input
+write2file <- function(data, outputfilename, include_rownames=TRUE){
+  "Writes data to output file"
+  write.table(data, file = outputfilename, sep = "\t", row.names = include_rownames)
 }
 
-################################################################################
-# MAIN CODE
-################################################################################
-#generate gene list
-gene_list = create_gene_list("Mock.KO")
+#Creates PDF image, wraps table, runs ggplot
+final_output <-function(table_results,table_filename,include_rownames,dotplot_results,cat_num,dot_color,
+                        gg_filename){
+  write2file(table_results, table_filename, include_rownames)
+  mypdf <- dotplot(dotplot_results, showCategory=cat_num, color=dot_color)
+  ggsave(filename = gg_filename , height= 8.90, width = 12.80, device = "pdf", plot = mypdf)
+}
+```
 
-#enrichment analysis
-enrichment_analysis(gene_list)
+#Format annotations
+```{r}
+ensembl2entrez <- function(dge_results, organism, write = FALSE){
+  "Converts EnsemblIDs to ENTREZID"
+  # For mapping EnsemblID to ENTREZID 
+  ensembl2ENTREZID <- bitr(dge_results$ensid_gene, fromType = "ENSEMBL", toType = c("ENTREZID"), OrgDb = organism)
+  # Rename column ENSEMBL to ensid_gene before join on column name
+  colnames(ensembl2ENTREZID)[colnames(ensembl2ENTREZID)=="ENSEMBL"] <- "ensid_gene"
+  # Saving mapping file to output file
+  if (write){
+    write2file(ensembl2ENTREZID, paste(out_dir,"ensembl2entrez_", gsub('\\.', '-', organism$packageName), ".txt", sep = ""), include_rownames = FALSE)
+  }
+  deg_res_entrez <- merge(dge_results, ensembl2ENTREZID, by="ensid_gene")
+  return(deg_res_entrez)
+}
+
+
+ensembl2uniprot <- function(dge_results, organism, write = FALSE){
+  "Converts EnsemblIDs to UNIPROTID"
+  # For mapping EnsemblID to UNIPROTID 
+  ensembl2UNIPROTID <- bitr(dge_results$ensid_gene, fromType = "ENSEMBL", toType = c("UNIPROT"), OrgDb = organism)
+  # Rename column ENSEMBL to ensid_gene before join on column name
+  colnames(ensembl2UNIPROTID)[colnames(ensembl2UNIPROTID)=="ENSEMBL"] <- "ensid_gene"
+  # Saving mapping file to output file
+  if (write) {
+    write2file(ensembl2UNIPROTID, paste(out_dir,"ensembl2uniprot_", gsub('\\.', '-', organism$packageName), ".txt", sep = ""), include_rownames = FALSE)
+  }
+  deg_res_uniprot <- merge(dge_results, ensembl2UNIPROTID, by="ensid_gene")
+  return(deg_res_uniprot)
+}
+```
+
+
+# Creates correctly formatted pre-ranked gene list for GSEA (need to convert EnsemblID to ENTREZID or UNIPROTID, if using transcript results)
+```{r}
+## Calls functions: ensembl2entrez and ensembl2uniprot
+format_preranked_list <- function (deg_results, organism, collapse_on_gene=FALSE){
+  "Return sorted pre-ranked gsea list"
+  
+  f_helper <- function(deg_preranked, type){
+    "Re-shapes data from long to wide format"
+    geneList = deg_preranked$gsea_ranking_score
+    if (type == "ensid_gene"){
+      names(geneList) = as.character(deg_preranked$ensid_gene)
+    } else if(type == "ENTREZID"){
+      names(geneList) = as.character(deg_preranked$ENTREZID)
+    } else if (type == "UNIPROT") {
+      names(geneList) = as.character(deg_preranked$UNIPROT)
+    }
+    #names(geneList) = as.character(deg_preranked$type)
+    geneList = sort(geneList, decreasing = TRUE)
+    
+    return(geneList)
+  }
+  
+  # ClusterProfiler's GSEA functions do not support ensemblIDs   
+  deg_w_entrez <- ensembl2entrez(deg_results, organism, write = TRUE)
+  
+  # Also converting to UNIPROTID, useful if looking at transcript regulation from EBseq   
+  deg_w_uniprot <- ensembl2uniprot(deg_results, organism, write = TRUE)
+  
+  # Collapse Multiple references to the same gene (summarize by mean)
+  if (collapse_on_gene){
+    deg_results <- deg_results %>% group_by(ensid_gene) %>% summarize(gsea_ranking_score = mean(gsea_ranking_score))
+    deg_w_entrez <- deg_w_entrez %>% group_by(ENTREZID) %>% summarize(gsea_ranking_score = mean(gsea_ranking_score))
+    deg_w_uniprot <- deg_w_uniprot %>% group_by(UNIPROT) %>% summarize(gsea_ranking_score = mean(gsea_ranking_score))
+  }
+  
+  # Formatting Genelist with EnsemblIDs, Entrez, Uniprot
+  geneList_ENSEMBL = f_helper(deg_preranked = deg_results, type = "ensid_gene")
+  geneList_ENTREZ = f_helper(deg_preranked = deg_w_entrez, type = "ENTREZID")
+  geneList_UNIPROT = f_helper(deg_preranked = deg_w_uniprot, type = "UNIPROT")
+  
+  return(list(ensembl=geneList_ENSEMBL, entrez=geneList_ENTREZ, uniprot=geneList_UNIPROT))
+}
+```
+
+# Filters DEG results based on adjusted p-value and FC direction
+```{r}
+directionality <- function(deg_results, fdr_threshold = 0.05 , fc_threshold = 2){
+  "Returns filtered DGE list based on pvalue and FC direction"
+  # Significant up and down regulated DEG results
+  sig_deg = filter(deg_results, fdr <= fdr_threshold & (fc >= fc_threshold | fc <= -fc_threshold))
+  # Significant up-regulated DEG results
+  sig_up = filter(deg_results, fdr <= fdr_threshold & fc >= fc_threshold)
+  # Significant down-regulated DEG results
+  sig_down = filter(deg_results, fdr <= fdr_threshold & fc <= -fc_threshold) 
+  
+  return(list(both=sig_deg, up=sig_up, down=sig_down))
+}
+
 
 ```
 
-Review pathview gene lists
+# GO
+```{r}
+# Running GO Enrichment Analysis of the significant DE genese
+geneOntologyEnrichmentAnalysis <- function(genelist, organism, background_genelist, pvalue_threshold=1.0, fdr_threshold=1.0){
+  "Returns list of enriched genesets from an over-representation test for the following sub-ontologies: BP, MF, CC"
+  # Cellular Compartment
+  goCC <- enrichGO(gene=genelist, OrgDb=organism, universe = background_genelist, keyType='ENSEMBL', ont="CC", 
+                   pAdjustMethod = "BH", pvalueCutoff  = pvalue_threshold, qvalueCutoff  = fdr_threshold)
+  # Biological Process
+  goBP <- enrichGO(gene=genelist, OrgDb=organism, universe = background_genelist, keyType='ENSEMBL', ont="BP", 
+                   pAdjustMethod = "BH", pvalueCutoff  = pvalue_threshold, qvalueCutoff  = fdr_threshold)
+  # Molecular Function
+  goMF <- enrichGO(gene=genelist, OrgDb=organism, universe = background_genelist, keyType='ENSEMBL', ont="MF", 
+                   pAdjustMethod = "BH", pvalueCutoff  = pvalue_threshold, qvalueCutoff  = fdr_threshold)
+  
+  # Converting Geneset descriptions to upper case for plotting
+  goCC@result$Description <- toupper(goCC@result$Description)
+  goBP@result$Description <- toupper(goBP@result$Description)
+  goMF@result$Description <- toupper(goMF@result$Description)
+  
+  return(list(CC=goCC, BP=goBP, MF=goMF))
+}
+
+
+# GSEA: C5 Biological Process, Cellular Component, Molecular Function 
+gseaC5 <- function(pre_ranked_list, organism, pvalue_threshold=1.0, verbose_output=F, myseed=1234){
+  "Returns list of enriched genesets from GSEA for the following sub-ontologies: BP, MF, CC"
+  set.seed(myseed)
+  
+  gseCC <- gseGO(geneList=pre_ranked_list, ont="CC", keyType='ENSEMBL', OrgDb=organism, pAdjustMethod = "fdr", 
+                 seed=TRUE, pvalueCutoff  = pvalue_threshold, verbose=verbose_output, nPerm = 20000)
+  gseBP <- gseGO(geneList=pre_ranked_list, ont="BP", keyType='ENSEMBL', OrgDb=organism, pAdjustMethod = "fdr", 
+                 seed=TRUE, pvalueCutoff  = pvalue_threshold, verbose=verbose_output, nPerm = 20000)
+  gseMF <- gseGO(geneList=pre_ranked_list, ont="MF", keyType='ENSEMBL', OrgDb=organism, pAdjustMethod = "fdr", 
+                 seed=TRUE, pvalueCutoff  = pvalue_threshold, verbose=verbose_output, nPerm = 20000)
+  
+  # Converting Geneset descriptions to upper case for plotting
+  gseCC@result$Description <- toupper(gseCC@result$Description)
+  gseBP@result$Description <- toupper(gseBP@result$Description)
+  gseMF@result$Description <- toupper(gseMF@result$Description)
+  
+  return(list(CC=gseCC, BP=gseBP, MF=gseMF))
+  
+}
+```
+
+######################################################################
+# Pseudo Main Method
+######################################################################
+```{r}
+main <- function(workdir, deg_input, mycontrast, myseed=1234) {
+  
+  # Set Seed for GSEA
+  set.seed(myseed)
+  
+  # Reading in DEG results and removing genename from ensid_gene (where "ENSEMBLID|GENENAME")
+  filename = deg_input
+  Contrast = mycontrast
+  deg = read.table(filename, header = TRUE)
+  deg$ensid_gene = gsub('\\..*','', deg$ensid_gene)  # regular-expression to remove everything after the '.'
+  
+  # Set working directory
+  #setwd(workdir)             # "/Users/kuhnsa/Desktop/Archive/ccbr1014"
+  
+  #initialize Output Directory (comparison)
+  dir.create(file.path(workdir), showWarnings = FALSE)
+  
+  ##########################################################################
+  # Over-representation Analysis (ORA)
+  ##########################################################################
+  cat("\n*** Over-representation Analysis (ORA)\n")
+  
+  # Initialize Output Directory (ORA)
+  dir.create(file.path(workdir, "ORA"), showWarnings = FALSE)
+  
+  # Background geneset for over-representation test
+  background = deg$ensid_gene
+  
+  # Filtered List of Significant Differential DGE Results for GOEA
+  ## where: both = up and down regulated; up = up-regulated; down = down-regulated 
+  sig_res <- directionality(deg)
+  
+  ###################
+  # C5: BP, MF, CC
+  
+  # Running GO Enrichment Analysis of the significant DE geneset for each sub-ontology
+  ## Cellular Compartment (CC), Biological Process (BP), Molecular Function (MF)
+  cat("Running ORA for C5: BP, MF, CC\n")
+  
+  goea_res <- geneOntologyEnrichmentAnalysis(genelist = sig_res$both$ensid_gene, organism = org.Hs.eg.db, background_genelist = background)
+  
+  # Saving results and figures for GO term over-representation tests
+  ## Cellular Compartment
+  final_output(goea_res$CC@result, paste(workdir,"ORA/", Contrast, "_C5CC_GO_results.txt", sep=""), FALSE,
+               goea_res$CC, 15, "qvalue",
+               paste(workdir,"ORA/", Contrast, "_C5CC_GO_dotplot.pdf", sep=""))
+  
+  ## Biological Process
+  final_output(goea_res$BP@result, paste(workdir,"ORA/", Contrast, "_C5BP_GO_results.txt", sep=""), FALSE,
+               goea_res$BP, 15, "qvalue",
+               paste(workdir,"ORA/", Contrast, "_C5BP_GO_dotplot.pdf", sep=""))
+  
+  ## Molecular Function 
+  final_output(goea_res$MF@result, paste(workdir,"ORA/", Contrast, "_C5MF_GO_results.txt", sep=""), FALSE,
+               goea_res$MF, 15, "qvalue",
+               paste(workdir,"ORA/", Contrast, "_C5MF_GO_dotplot.pdf", sep=""))
+  
+  ###################
+  # C2CP: REACTOME
+  cat("Running ORA for C2CP: Reactome\n")
+  
+  # Running ORA on Reactome genesets
+  ## Significant up and down regulated genes
+  sig_res_entrez <- ensembl2entrez(sig_res$both, organism = org.Hs.eg.db)
+  
+  ## Background genes set (everything)
+  background_entrez <- ensembl2entrez(deg, organism = org.Hs.eg.db)
+  
+  # Using ReactomePA to find enriched genesets
+  goea_c2_cp <- enrichPathway(gene=sig_res_entrez$ENTREZID, organism = 'human', universe = background_entrez$ENTREZID, 
+                              pvalueCutoff=1.0, qvalueCutoff=1.0, pAdjustMethod = "fdr", readable=T, minGSSize = 20)
+  
+  # Writing results and figures to files
+  final_output(goea_c2_cp@result, paste(workdir,"ORA/", Contrast, "_C2CP_REACTOME_results.txt", sep=""), FALSE,
+               goea_c2_cp, 15, "qvalue",
+               paste(workdir,"ORA/", Contrast, "_C2CP_REACTOME_dotplot.pdf", sep=""))
+  
+  ###################
+  # C2CP: KEGG
+  cat("Running ORA for C2CP: KEGG\n")
+  
+  # Running ORA on KEGG genesets
+  ## Significant up and down regulated genes (must convert to valid geneid ~ entrez)
+  kegg_res_ora <- enrichKEGG(gene=sig_res_entrez$ENTREZID, organism = 'hsa', universe = background_entrez$ENTREZID, 
+                             pvalueCutoff=1.0, qvalueCutoff=1.0, pAdjustMethod = "fdr", minGSSize = 10)
+  
+  # Saving KEGG ORA results
+  final_output(kegg_res_ora@result, paste(workdir,"ORA/", Contrast, "_C2CP_KEGG_results.txt", sep=""), FALSE,
+               kegg_res_ora, 15, "qvalue",
+               paste(workdir,"ORA/", Contrast, "_C2CP_KEGG_dotplot.pdf", sep=""))
+  
+  ##########################################################################
+  # Gene Set Enrichment Analysis
+  ##########################################################################
+  cat("*** Geneset Enrichment Analysis (GSEA)\n")
+  
+  # Initialize Output Directory (GSEA)
+  dir.create(file.path(workdir, "GSEA"), showWarnings = FALSE)
+  
+  # Formatted GSEA pre-ranked genelist (formatted res for ensemblID (default), entrez, and uniprot (working with isoforms))
+  gsea_genelist <- format_preranked_list(deg, organism =  org.Hs.eg.db, collapse_on_gene = TRUE)
+  
+  ###################
+  # C5: BP, MF, CC
+  cat("Running GSEA for C5: BP, MF, CC\n")
+  
+  # GO Gene Set Enrichment Analysis: C5 GO Biological Process, Cellular Component, Molecular Function
+  gsea_c5_res <- gseaC5(pre_ranked_list = gsea_genelist$ensembl, organism = org.Hs.eg.db, pvalue_threshold = 1.0, verbose=F)
+  
+  # C5 CC sub-ontology
+  final_output(gsea_c5_res$CC@result, paste(workdir,"GSEA/gsea_", Contrast, "_C5CC_GO_results.txt", sep=""), FALSE,
+               gsea_c5_res$CC, 15, "qvalue",
+               paste(workdir,"GSEA/gsea_", Contrast, "_C5CC_GO_dotplot.pdf", sep=""))
+  saveRDS(gsea_c5_res$CC, paste(workdir,"GSEA/gsea_", Contrast, "_C5CC_GO_results.rds", sep=""))
+  
+  # C5 BP sub-ontology
+  final_output(gsea_c5_res$BP@result, paste(workdir,"GSEA/gsea_", Contrast, "_C5BP_GO_results.txt", sep=""), FALSE,
+               gsea_c5_res$BP,  15, "qvalue",
+               paste(workdir,"GSEA/gsea_", Contrast, "_C5BP_GO_dotplot.pdf", sep=""))
+  saveRDS(gsea_c5_res$BP, paste(workdir,"GSEA/gsea_", Contrast, "_C5BP_GO_results.rds", sep=""))
+
+  #  C5MF sub-ontology
+  final_output(gsea_c5_res$MF@result, paste(workdir,"GSEA/gsea_", Contrast, "_C5MF_GO_results.txt", sep=""), FALSE,
+               gsea_c5_res$MF,  15, "qvalue",
+               paste(workdir,"GSEA/gsea_", Contrast, "_C5MF_GO_dotplot.pdf", sep=""))
+  saveRDS(gsea_c5_res$MF, paste(workdir,"GSEA/gsea_", Contrast, "_C5MF_GO_results.rds", sep=""))
+
+  ###################
+  # C2CP: KEGG
+  cat("Running GSEA for C2CP: KEGG\n")
+  
+  # KEGG Geneset Enrichment Analysis
+  kegg_res_entrez <- gseKEGG(geneList = gsea_genelist$entrez, organism = 'hsa', nPerm = 30000, seed = TRUE, 
+                             minGSSize = 10, pvalueCutoff = 1.0,  pAdjustMethod = "fdr", verbose = FALSE)
+  
+  # Saving results
+  final_output(kegg_res_entrez@result, paste(workdir,"GSEA/gsea_", Contrast, "_C2CP_KEGG_results.txt", sep=""), FALSE,
+               kegg_res_entrez,  15, "qvalue",
+               paste(workdir,"GSEA/gsea_", Contrast, "_C2CP_KEGG_dotplot.pdf", sep=""))
+  saveRDS(kegg_res_entrez, paste(workdir,"GSEA/gsea_", Contrast, "_C2CP_KEGG_results.rds", sep=""))
+
+  #create heatplots
+  edox <- setReadable(kegg_res_entrez, 'org.Hs.eg.db', 'ENTREZID')
+  p1 <- heatplot(edox)
+  p2 <- heatplot(edox, foldChange=gsea_genelist$entrez)
+  mypdf <- cowplot::plot_grid(p1, p2, ncol=1, labels=LETTERS[1:2])
+  ggsave(filename = paste(workdir,"GSEA/gsea_", Contrast, "_C2CP_KEGG_heatplot.pdf", sep=""), 
+         height = 8.90, width = 12.80, device = "pdf", plot = mypdf)  
+  
+  #gsea final plot
+  final_output
+  mypdf <- gseaplot2(kegg_res_entrez, geneSetID = 1, title = kegg_res_entrez$Description[1])
+  ggsave(filename = paste(workdir,"GSEA/gsea_", Contrast, "_C2CP_KEGG_gseaplot.pdf", sep=""), 
+         height = 8.90, width = 12.80, device = "pdf", plot = mypdf)  
+  
+  ###################
+  # C2CP: REACTOME
+  cat("Running GSEA for C2CP: Reactome\n")
+  
+  # Pre-ranked deg list must consist of entrez ids (using ReactomePA package) 
+  gsea_C2_CP <- gsePathway(gsea_genelist$entrez, organism = "human", exponent = 1, nPerm = 30000, minGSSize = 10, maxGSSize = 500, pvalueCutoff = 1.0,
+                           pAdjustMethod = "fdr", verbose = FALSE, seed = TRUE)
+  
+  # Saving results
+  final_output(gsea_C2_CP@result, paste(workdir,"GSEA/gsea_", Contrast, "_C2CP_REACTOME_results.txt", sep=""), FALSE,
+               gsea_C2_CP,  15, "qvalue",
+               paste(workdir,"GSEA/gsea_", Contrast, "_C2CP_REACTOME_dotplot.pdf", sep=""))
+  saveRDS(gsea_C2_CP, paste(workdir,"GSEA/gsea_", Contrast, "_C2CP_REACTOME_results.rds", sep=""))
+}
+```
+
+#####################################
+# Run ORA/GSEA analysis
+#####################################
+```{r}
+#paths
+deg_dir = "deg_012021/"
+out_dir = "analysis/ora_vs_gsea_test/"
+
+#Mock vs KO
+main(deg_input = paste0(deg_dir, "DEG_Mock-KO_0.5_0.5/limma_DEG_Mock-KO_all_genes.txt"), 
+     workdir = paste0(out_dir,"Mock.KO/"),
+     mycontrast = "Mock.KO")
+
+#WT vs KO
+main(deg_input = paste0(deg_dir, "DEG_WT-KO_0.5_0.5/limma_DEG_WT-KO_all_genes.txt"), 
+     workdir = paste0(out_dir,"WT.KO/"),
+     mycontrast = "WT.KO")
+
+#Y318A vs KO
+main(deg_input = paste0(deg_dir, "DEG_Y318A-KO_0.5_0.5/limma_DEG_Y318A-KO_all_genes.txt"), 
+     workdir = paste0(out_dir,"Y318A.KO/"),
+     mycontrast = "Y318A.KO")
+
+```
+
+#####################################
+# Review pathview gene lists
+#####################################
 ```{r}
 library(VennDiagram)
 
@@ -148,4 +437,3 @@ file_save = (paste(analysis_dir,"images/venn_genes_pathview.png",sep=""))
 color.list =  c("light blue", "pink")
 GenerateVennD(gene_oxphos,gene_prot,c("Ox Phos","Proteasome"),color.list,"KEGG Gene Comparison", file_save)
 ```
-
