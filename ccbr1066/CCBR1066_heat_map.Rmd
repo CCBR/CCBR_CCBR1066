@@ -1,0 +1,168 @@
+---
+title: "Heatmap"
+author: "Samantha Sevilla"
+date: "4/13/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+```{r}
+library(dplyr)
+```
+
+
+
+```{r setup, include=FALSE}
+#normalized count file
+input_dir = "~/../../Volumes/projects/ccbr1066/rnaseq_110520/"
+input_file = "RawCountFile_RSEM_genes_filtered.txt"
+
+output_dir = "~/../../Volumes/projects/ccbr1066/analysis/"
+  
+#if there is a subset of samples, input below. otherwise leave ""
+sample_list = ""
+
+#if there is a subet gene list, select file (will pull in first col), otherwise leave ""
+gene_file = "~/../../Volumes/projects/ccbr1066/analysis/pathview_input_select.txt"
+  
+  
+```
+
+#normalize data
+```{r}
+#from https://github.com/CCBR/rNA/blob/master/src/rNA.Rmd
+library(edgeR)
+
+#input raw counts
+input_df = read.csv(paste0(input_dir,"DEG_ALL/",input_file),sep="\t")
+
+#groups input
+groups_df = read.csv(paste0(input_dir,"groups.tab"),sep="\t",header = FALSE)[,c("V1","V2")]
+colnames(groups_df) = c("sampleid","group")
+
+# Create DGEList
+deg = edgeR::DGEList(counts = as.matrix(select(input_df,-c("symbol"))),
+                     genes=input_df$symbol, 
+                     group = groups_df$group)
+
+# Filter lowly expressed genes
+keep_genes = edgeR::filterByExpr(deg)        # Using default: Gene must have 10 reads in >= 70% samples
+deg = deg[keep_genes,,keep.lib.sizes=FALSE]  # Recaluate new lib.sizes after filtering
+
+# edgeR TMM normalization
+deg = calcNormFactors(deg, method = "TMM")   # calculate scaling norm.factors
+
+# limma voom normalization
+deg_voom = voom(deg, normalize="quantile", plot = TRUE, save.plot = TRUE)
+
+#output counts
+deg_counts = as.data.frame(deg_voom$E)
+```
+
+
+```{r}
+#split into symbol, ensemblID
+gene_annotation = as.data.frame(deg_voom$genes)
+deg_counts$SYMBOL = as.character(lapply(gene_annotation$genes,function(x){strsplit(x,"|",fixed=TRUE)[[1]][[2]]}))
+deg_counts$EID_complete = as.character(lapply(gene_annotation$genes,function(x){strsplit(x,"|",fixed=TRUE)[[1]][[1]]}))
+deg_counts$EID_partial = as.character(lapply(gene_annotation$genes,function(x){strsplit(x,".",fixed=TRUE)[[1]][[1]]}))
+
+head(deg_counts)
+
+#subset groups df if sample list is given
+if(sample_list!=""){
+  groups_df = subset(groups_df,sampleid %in% sample_list)
+}
+
+#create final df, averaged by groups
+final_df = deg_counts[,c("SYMBOL","EID_complete","EID_partial")]
+for (groupid in unique(groups_df$group)){
+  group_list = subset(groups_df,group== groupid)$sampleid
+  subset_df = deg_counts[,c(group_list)]
+  final_df[,groupid] = rowMeans(deg_counts[ , c(group_list)])
+}
+remove(subset_df)
+
+#read in gene_list subset
+if(gene_file != ""){
+  gene_list = read.csv(gene_file,sep="\t")[,c(1)]
+} else{
+  gene_list = ""
+}
+
+```
+
+
+
+```{r}
+suppressMessages(library(RColorBrewer))
+suppressMessages(library(pheatmap))
+suppressMessages(library(gplots))
+suppressMessages(library(grid))
+suppressMessages(library(argparse))
+
+# Overwrites the pheatmap defaults
+draw_colnames_45 <- function (coln, gaps, ...) {
+  "Overwrites body of pheatmap:::draw_colnames, customizing it my liking"
+  coord = pheatmap:::find_coordinates(length(coln), gaps)
+  x = coord$coord - 0.5 * coord$size
+  res = textGrob(coln, x = x, y = unit(1, "npc") - unit(3,"bigpts"), vjust = 0.5, hjust = 1, rot = 45, gp = gpar(...))
+  return(res)
+}
+
+# Overwrite pheatmaps default draw_colnames with new version
+assignInNamespace(x="draw_colnames", value="draw_colnames_45",ns=asNamespace("pheatmap")) 
+  
+# Set Working Directory
+setwd(outdir)
+  
+# Create Heatmaps directory for output file
+dir.create(file.path(getwd(), "Heatmaps"), showWarnings = FALSE)
+  
+# subset counts for gene_list, if one is given
+normcount = final_df[,c(1,4:ncol(final_df))]
+gene=gene_list
+mycounts <- subset(normcount, SYMBOL %in% gene)
+rownames(mycounts)= mycounts$SYMBOL
+  
+# Creating Dataframe to map samplenames to groups
+meta = groups_df
+groups <- data.frame(as.factor(meta$group))
+colnames(groups) <- "Groups"
+rownames(groups) <- meta$sampleid
+  
+# Creating Group Column Annotation Colors
+columnColors <- c("lightpink","lightblue","orange","purple")
+names(columnColors) <- unique(groups$Groups)
+anno_colors <- list(Groups = columnColors)
+  
+# Heatmap Color Gradients 
+paletteLength <- 1000
+mycolors <- colorRampPalette(c("blue","white","red"), interpolate = "linear")(paletteLength)
+
+#create heatmap from selected genes
+outfname="select_genes.png"
+
+pheatmap(mycounts[,c(2:ncol(mycounts))], 
+           scale = "row", clustering_method = "complete", 
+           clustering_distance_cols = "correlation", #, annotation_names_col = FALSE,
+           cellwidth = 30, fontsize = 8, fontsize_row = 8, fontsize_col = 13, color = mycolors, 
+           #annotation = groups,
+           border_color = "NA", cutree_cols=2, 
+           legend_breaks = c(-3,-2,-1,0,1,2,3), annotation_colors = anno_colors, 
+           filename = paste("Heatmaps/", outfname, sep = ""))
+
+#create heatmap from all genes
+outfname="all_genes.png"
+mycounts <- normcount
+rownames(mycounts)= mycounts$SYMBOL
+
+pheatmap(mycounts[,c(2:ncol(mycounts))], 
+           scale = "row", clustering_method = "complete", 
+           clustering_distance_cols = "correlation", show_rownames = FALSE,
+           cellwidth = 30, fontsize = 8, fontsize_row = 8, fontsize_col = 13, color = mycolors, 
+           border_color = "NA", cutree_cols=2, 
+           legend_breaks = c(-3,-2,-1,0,1,2,3), annotation_colors = anno_colors,
+           filename = paste("Heatmaps/", outfname, sep = ""))
+
+```

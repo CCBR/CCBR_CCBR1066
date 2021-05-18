@@ -1,0 +1,236 @@
+---
+title: "CCBR1066_DEG"
+author: "Vishal Koparde, PhD [CCBR]"
+date: "01/02/2021"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+params:
+  folder: "/Volumes/projects/ccbr1066/"
+  ctrl: "K"
+  treat: "W"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE, warning=FALSE, message=FALSE}
+knit_hooks$set(rgl = function(before, options, envir) {
+  if (!before) {
+    ## after a chunk has been evaluated
+    if (rgl.cur() == 0) return()  # no active device
+    name = paste(options$fig.path, options$label, sep = '')
+    rgl.snapshot(paste(name, '.png', sep = ''), fmt = 'png')
+    return(paste('\\includegraphics{', name, '}\n', sep = ''))
+  }
+})
+knit_hooks$set(webgl = hook_webgl)
+
+library(rgl)
+library(knitr)
+library("RUVSeq")
+library("tidyverse")
+library("EnhancedVolcano")
+library("ggVennDiagram")
+library("clusterProfiler")
+library("enrichplot")
+library("msigdbr")
+library("fgsea")
+library("magrittr")
+
+```
+
+## Load counts and filter by CPM
+
+```{r load_counts,echo=FALSE, warning=FALSE, message=FALSE}
+raw_file = paste(params$folder,"deg_012021/DEG_ALL/RawCountFile_RSEM_genes.txt",sep="")
+counts=read.table(raw_file,sep="\t",header=TRUE)
+counts=column_to_rownames(counts,var="symbol")
+counts=ceiling(counts)
+cpm_counts=cpm(as.matrix(counts))
+log_cpm_counts=log2(cpm_counts)
+keep=rowSums(cpm_counts>0.5)>2
+counts=counts[keep,]
+x=as.factor(substr(colnames(counts),1,nchar(colnames(counts))-2))
+
+ctrl=params$ctrl
+ctrl="K"
+treat=params$treat
+treat="W"
+keep=treat == x | ctrl == x
+newcounts=counts[,keep]
+newx=as.factor(substr(colnames(newcounts),1,nchar(colnames(newcounts))-2))
+newx=relevel(newx,ref=ctrl)
+```
+After CPM filtering, we have `r dim(newcounts)[2]` samples with a total of `r dim(newcounts)[1]` genes.
+
+## Perform RUVseq
+
+```{r ruvseq, echo =FALSE, fig.width=5,fig.height=8,fig.align='center'}
+set=newSeqExpressionSet(as.matrix(newcounts),phenoData = data.frame(newx,row.names = colnames(newcounts)))
+set1 <- betweenLaneNormalization(set, which="upper")
+#set2 <- RUVg(set1,negative_control_genes_TMM,k=1) no negative control
+par(mfcol=c(2,2))
+EDASeq::plotRLE(set, outline=FALSE, ylim=c(-1, 1), col=as.numeric(newx),main="BEFORE")
+EDASeq::plotRLE(set1, outline=FALSE, ylim=c(-1, 1), col=as.numeric(newx),main="AFTER_LANENORMALIZATION")
+#EDASeq::plotRLE(set2, outline=FALSE, ylim=c(-1, 1), col=as.numeric(newx),main="AFTER_RUVSEQ")
+DESeq2::plotPCA(set, col=as.numeric(newx),cex=1.2,main="BEFORE")
+DESeq2::plotPCA(set1, col=as.numeric(newx),cex=1.2,main="AFTER_LANENORMALIZATION")
+#DESeq2::plotPCA(set2, col=as.numeric(newx),cex=1.2,main="AFTER_RUVSEQ")
+```
+
+## Get Differentially Expressed Genes
+
+```{r get_degs, echo=FALSE}
+design <- model.matrix(~newx, data=pData(set))
+y <- DGEList(counts=counts(set), group=newx)
+# y <- calcNormFactors(y, method="upperquartile")
+y <- calcNormFactors(y, method="TMM")
+y <- estimateGLMCommonDisp(y, design)
+y <- estimateGLMTagwiseDisp(y, design)
+fit <- glmFit(y, design)
+lrt <- glmLRT(fit, coef=2)
+top <- topTags(lrt, n=nrow(set))$table
+
+
+#negative control group
+#design2 <- model.matrix(~newx + W_1, data=pData(set2))
+#y2 <- DGEList(counts=counts(set2), group=newx)
+#y2 <- calcNormFactors(y2, method="TMM")
+#y2 <- estimateGLMCommonDisp(y2, design2)
+#y2 <- estimateGLMTagwiseDisp(y2, design2)
+#fit2 <- glmFit(y2, design2)
+#lrt2 <- glmLRT(fit2, coef=2)
+#top2 <- topTags(lrt2, n=nrow(set2))$table
+
+#if neg control
+#colnames(top2)=paste0(colnames(top2),"_RUVSeq")
+#m=merge(top,top2,by='row.names') %>% column_to_rownames(var="Row.names")
+m=top
+m = m %>% rownames_to_column(var="rowid") %>% separate(col="rowid",sep="[|]",into = c("EnsemblID","GeneSymbol"))
+```
+
+### Volcanos
+
+```{r deg_volcanos, echo=FALSE,fig.width=8,fig.height=10,fig.align='center'}
+
+npos=sum(m$logFC>=1.5 & m$FDR<=0.05)
+nneg=sum(m$logFC<=1.5 & m$FDR<=0.05)
+EnhancedVolcano(m,
+                lab=m$GeneSymbol,
+                x='logFC',y='FDR',
+                ylab = bquote(~-Log[10]~italic(FDR)),
+                title = "Volcano plot significance",
+                subtitle= paste("Downregulated in WT :",npos," | Upregulated in WT :",nneg),
+                legendLabels = c('NS', expression(Log[2]~FC),'FDR', expression(FDR~and~log[2]~FC)))
+
+#npos=sum(m$logFC_RUVSeq>=1 & m$FDR_RUVSeq<=0.05)
+#nneg=sum(m$logFC_RUVSeq<=1 & m$FDR_RUVSeq<=0.05)
+#EnhancedVolcano(m,
+#                lab=m$GeneSymbol,
+#                x='logFC_RUVSeq',y='FDR_RUVSeq',
+#                ylab = bquote(~-Log[10]~italic(FDR)),
+#                title = "With RUVSeq",
+#                subtitle= paste("Upregulated :",npos,"Downregulated :",nneg),
+#                legendLabels = c('NS', expression(Log[2]~FC),'FDR', expression(FDR~and~log[2]~FC)))
+
+
+
+```
+
+### Venn Diagram
+
+```{r venn, echo=FALSE,,fig.width=6,fig.height=6,fig.align='center'}
+tovenn <- list(NoRUVseq=rownames(m[abs(m$logFC)>=1 & m$FDR<=0.05,]),
+                 RUVseq=rownames(m[abs(m$logFC_RUVSeq)>=1 & m$FDR_RUVSeq<=0.05,]))
+
+
+ggVennDiagram(tovenn)
+```
+
+### DEG lists
+```{r deg_lists, echo=FALSE, warning=FALSE,message=FALSE,results='asis'}
+#mdf=as.data.frame(m[,c("EnsemblID","GeneSymbol","logFC","PValue","FDR","logFC_RUVSeq","PValue_RUVSeq", "FDR_RUVSeq")])
+mdf=as.data.frame(m[,c("EnsemblID","GeneSymbol","logFC","PValue","FDR")])
+
+prefix=paste0(params$treat,"_vs_",params$ctrl)
+write.table(mdf,file=paste(prefix,"deg","txt",sep="."),quote=FALSE,row.names = FALSE,sep="\t")
+mdf %>% DT::datatable(rownames=FALSE,options=list(pageLength = 10,order = list(list(5, 'asc')))) %>% DT::formatRound(columns=colnames(mdf)[!("EnsemblID" == colnames(mdf) | "GeneSymbol" == colnames(mdf))])
+```
+
+## GSEA Analysis
+### C2CP
+
+```{r gsea_noruvseq,echo=FALSE,warning=FALSE,message=FALSE, fig.align='center',fig.width=10,fig.height=7}
+gsea_plus_plot <- function(gl,t2g,ttl,fn){
+  # gl=geneList_noRUVSeq
+  # t2g=c5gobp
+  result=GSEA(geneList = gl,TERM2GENE = t2g)
+  resultdf=as.data.frame(result)
+  write.table(resultdf,file=fn,quote=FALSE,sep="\t",row.names = FALSE,col.names = TRUE)
+  if(nrow(result)!=0){
+    if(nrow(result)>4){
+      npath=5
+    } else {
+      npath=nrow(result)
+    }
+    gseaplot2(result, geneSetID = 1:npath,pvalue_table = TRUE, title = ttl)
+  }
+}
+
+prefix=paste0(params$treat,"_vs_",params$ctrl,".gsea")
+prefix=paste0("K_vs_W.gsea")
+geneList_noRUVSeq=sign(m$logFC)*-1*log10(m$PValue)
+names(geneList_noRUVSeq)=as.character(m$GeneSymbol)
+geneList_noRUVSeq <- sort(geneList_noRUVSeq, decreasing = TRUE)
+
+#geneList_RUVSeq=sign(m$logFC_RUVSeq)*-1*log10(m$PValue_RUVSeq)
+#names(geneList_RUVSeq)=as.character(m$GeneSymbol)
+#geneList_RUVSeq <- sort(geneList_RUVSeq, decreasing = TRUE)
+
+# c2cp_kegg=msigdbr(species = "Mus musculus", category = "C2", subcategory = "CP:KEGG") %>% dplyr::select(gs_name,gene_symbol)
+c2cp=msigdbr(species = "Homo sapiens", category = "C2") %>% dplyr::select(gs_name,gene_symbol)
+
+# s2e_noRUVSeq=as.data.frame(bitr(names(geneList_noRUVSeq), fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Mm.eg.db"))
+# s2e_RUVSeq=as.data.frame(bitr(names(geneList_RUVSeq), fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Mm.eg.db"))
+
+gsea_plus_plot(geneList_noRUVSeq,c2cp,"GSEA Plot",paste(prefix,"c2cp","noRUVSeq","txt",sep = "."))
+#gsea_plus_plot(geneList_RUVSeq,c2cp,"with RUVSeq",paste(prefix,"c2cp","noRUVSeq","txt",sep = "."))
+
+# cp_kegg_noRUVSeq=right_join(cp_kegg,s2e_noRUVSeq,by=c("gene_symbol"="SYMBOL"))
+# cp_kegg_RUVSeq=right_join(cp_kegg,s2e_RUVSeq,by=c("gene_symbol"="SYMBOL"))
+
+
+```
+
+
+### C3TFT:GTRD
+
+```{r gsea_tft,echo=FALSE,warning=FALSE,message=FALSE,fig.align='center',fig.width=10,fig.height=7}
+c3tftgtrd=msigdbr(species = "Homo sapiens", category = "C3", subcategory = "TFT:GTRD") %>% dplyr::select(gs_name,gene_symbol)
+gsea_plus_plot(geneList_noRUVSeq,c3tftgtrd,"without RUVSeq",paste(prefix,"c3tftgtrd","noRUVSeq","txt",sep = "."))
+#gsea_plus_plot(geneList_RUVSeq,c3tftgtrd,"with RUVSeq",paste(prefix,"c3tftgtrd","RUVSeq","txt",sep = "."))
+
+```
+
+### C5GO:MF
+
+```{r gsea_c5gomf,echo=FALSE,warning=FALSE,message=FALSE,fig.align='center',fig.width=10,fig.height=7}
+c5gomf=msigdbr(species = "Homo sapiens", category = "C5", subcategory = "GO:MF") %>% dplyr::select(gs_name,gene_symbol)
+gsea_plus_plot(geneList_noRUVSeq,c5gomf,"without RUVSeq",paste(prefix,"c5gomf","noRUVSeq","txt",sep = "."))
+#gsea_plus_plot(geneList_RUVSeq,c5gomf,"with RUVSeq",paste(prefix,"c5gomf","RUVSeq","txt",sep = "."))
+```
+
+### C5GO:BP
+
+```{r gsea_c5gobp,echo=FALSE,warning=FALSE,message=FALSE,fig.align='center',fig.width=10,fig.height=7}
+c5gobp=msigdbr(species = "Homo sapiens", category = "C5", subcategory = "GO:BP") %>% dplyr::select(gs_name,gene_symbol)
+gsea_plus_plot(geneList_noRUVSeq,c5gobp,"without RUVSeq",paste(prefix,"c5gobp","noRUVSeq","txt",sep = "."))
+#gsea_plus_plot(geneList_RUVSeq,c5gobp,"with RUVSeq",paste(prefix,"c5gobp","RUVSeq","txt",sep = "."))
+```
+
+
+
+```{r sessioninfo, echo=FALSE}
+sessionInfo()
+```
