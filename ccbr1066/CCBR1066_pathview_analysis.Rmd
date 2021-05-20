@@ -1,0 +1,80 @@
+---
+title: "CCBR1066_pathview_review"
+author: "Samantha Sevilla"
+date: "5/19/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+#####################################
+# functions
+#####################################
+```{r}
+library(VennDiagram)
+
+#comparison
+GenerateVennD <- function(list1,list2,list.names,list.cols,title.in,fname){
+  
+  venn.diagram(
+    #create venn
+    x=list(list1,list2),
+    category.names = list.names,
+    fill=list.cols,
+    
+    #title
+    main=title.in,
+    main.cex = 2,
+    
+    #output
+    filename = fname,
+    output=TRUE,
+  )
+}
+```
+
+#####################################
+# main code
+#####################################
+```{r}
+main_function<-function(color_list, file_save){
+  #read gene list for ox phos
+  path_df = read.csv(paste0(analysis_dir,"pathview_output/complete_mock:wt,y318A/genedata.hsa00190.tsv"),sep="\t")
+  head(path_df)
+  print("** Analysis for Hsa00190**")
+  print(paste0("The number of genes/complexes in list is ",nrow(path_df)))
+  print(paste0("The number of genes/complexes downregulated is ",nrow(subset(path_df,mol.col=="#00FF00"))))
+  print(paste0("The number of genes/complexes upregulated is ",nrow(subset(path_df,mol.col=="#FF0000" | mol.col=="#DE9E9E"))))
+  print(paste0("The number of genes/complexes not diff is ",nrow(subset(path_df,mol.col=="#D3D3D3"))))
+  print(paste0("The number of genes/complexes missing info ",nrow(subset(path_df,mol.col=="#FFFFFF"))))
+  
+  ## gene list
+  gene_oxphos = unique(path_df$labels)
+  
+  #read gene list for proteasome
+  path_df = read.csv(paste0(analysis_dir,"pathview_output/complete_mock:wt,y318A_proteasome/genedata.hsa03050.tsv"),sep="\t")
+  print("** Analysis for Hsa03050**")
+  print(paste0("The number of genes/complexes in list is ",nrow(path_df)))
+  print(paste0("The number of genes/complexes downregulated is ",nrow(subset(path_df,mol.col=="#00FF00"))))
+  print(paste0("The number of genes/complexes upregulated is ",nrow(subset(path_df,mol.col=="#FF0000" | mol.col=="#DE9E9E"))))
+  print(paste0("The number of genes/complexes not diff is ",nrow(subset(path_df,mol.col=="#D3D3D3"))))
+  print(paste0("The number of genes/complexes missing info ",nrow(subset(path_df,mol.col=="#FFFFFF"))))
+  gene_prot = unique(path_df$labels)
+  
+  GenerateVennD(gene_oxphos,gene_prot,c("Ox Phos","Proteasome"),color_list,"KEGG Gene Comparison", file_save)
+}
+```
+
+#####################################
+# run analysis
+#####################################
+```{r}
+#set dir
+analysis_dir = "~/../../Volumes/projects/ccbr1066/analysis/"
+
+#run code
+file_save = (paste(analysis_dir,"images/venn_genes_pathview.png",sep=""))
+color_list =  c("light blue", "pink")
+
+main_function(color_list, file_save)
+```
