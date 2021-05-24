@@ -51,7 +51,7 @@ deg2geneList<-function(deg){
 }
 
 gsea_plus_plot <- function(gl,t2g,ttl,fn){
-  result=GSEA(geneList = gl,TERM2GENE = t2g,eps = 0)
+  result=GSEA(geneList = gl,TERM2GENE = t2g,eps = 0, pvalueCutoff = 1)
   resultdf=as.data.frame(result)
   write.table(resultdf,file=fn,quote=FALSE,sep="\t",row.names = FALSE,col.names = TRUE)
   
@@ -73,7 +73,9 @@ gsea_plus_plot <- function(gl,t2g,ttl,fn){
 }
 
 ora_plus_plot <- function(gl,t2g,ttl,fn){
-  result=enricher(gene=gl,TERM2GENE=t2g,pvalueCutoff = 0.1)
+  result=enricher(gene=gl, TERM2GENE=t2g, pvalueCutoff = 1)
+  resultdf=as.data.frame(result)
+  write.table(resultdf,file=fn,quote=FALSE,sep="\t",row.names = FALSE,col.names = TRUE)
   
   if(nrow(result)==0){
     print("No sig results for ORA")
@@ -304,9 +306,9 @@ main_function<-function(deg_file,out_dir,contrast_id){
 
   ## C5:GO:CC
   print("Results for GO:CC")
-  p1 = gsea_plus_plot(gl=geneList,t2g=c5gobp,ttl=paste0("GSEA:GO:CC - ",contrast_id),
+  p1 = gsea_plus_plot(gl=geneList,t2g=c5gocc,ttl=paste0("GSEA:GO:CC - ",contrast_id),
                     fn=paste(out_dir,contrast_id,".c5gocc.gsea.results.txt",sep=""))
-  p2 = ora_plus_plot(gl=sigGeneList,t2g=c5gobp,ttl=paste0("ORA:GO:CC - ",contrast_id),
+  p2 = ora_plus_plot(gl=sigGeneList,t2g=c5gocc,ttl=paste0("ORA:GO:CC - ",contrast_id),
                    fn=paste(out_dir,contrast_id,".c5gocc.ora.results.txt",sep=""))
   save_plots(p2,p1,contrast_id,".c5gocc.dotplot.png")
 }
