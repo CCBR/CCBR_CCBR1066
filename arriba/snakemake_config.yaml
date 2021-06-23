@@ -1,8 +1,0 @@
-fastq_dir: "/data/CCBR_Pipeliner/sandbox/arriba/fastq/"
-output_dir: "/data/CCBR_Pipeliner/sandbox/arriba/output/03_optimized/"
-
-index_dir: "/data/CCBR_Pipeliner/db/PipeDB/Indices/GENOME_REFs/hg38_major_chrs/STAR/2.7.6a/" #dir with genomeParameters.txt file
-assembly_dir: "/data/CCBR_Pipeliner/db/PipeDB/Indices/GENOME_REFs/hg38_major_chrs/ref.fa"
-anno_dir: "/data/CCBR_Pipeliner/db/PipeDB/Indices/hg38_basic/genes.gtf"
-blacklist_dir: "/data/sevillas2/arriba/blacklist_hg38_GRCh38_v2.0.0.tsv"
-sample_list: "/home/sevillas2/arriba/sample_list.txt"
