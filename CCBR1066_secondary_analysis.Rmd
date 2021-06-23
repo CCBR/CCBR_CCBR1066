@@ -66,7 +66,7 @@ gsea_plus_plot <- function(gl,t2g,ttl,fn){
       lineheight = NULL
     )
   } else{
-    p1 = dotplot(result,title=ttl,font.size = 8, showCategory=20, split=".sign")+facet_grid(.~.sign)
+    p1 = dotplot(result,title=ttl,font.size = 8, showCategory=5, split=".sign")+facet_grid(.~.sign)
   }
   
   return(p1)
@@ -127,8 +127,9 @@ gsea_plus_heatplot<-function(deg_list, out_dir, contrast_list, annotation_df){
       #set genelist for ORA
       geneList=deg2geneList(deg)
       
-      #pvalue
-      tmp = GSEA(geneList = geneList,TERM2GENE = anno_db,eps = 0) #run GSEA
+      ## pvalue
+      #pull top paths
+      tmp = GSEA(geneList = geneList,TERM2GENE = anno_db,eps = 0, pvalueCutoff = 1) #run GSEA
       tmp_df = as.data.frame(tmp@result) #create df from results
       tmp_df = tmp_df[order(tmp_df$pvalue),] #order by pvalue
       tmp_df = tmp_df[1:5,c("ID","pvalue")] #save top 5 pathways
@@ -323,16 +324,19 @@ knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
 out_dir = "~/../../Volumes/projects/ccbr1066/analysis/ora_vs_gsea/"
 
 #Mock vs KO
+print("**MOCK v KO")
 main_function(deg_file = paste0(deg_dir, "DEG_Mock-KO_0.5_0.5/limma_DEG_Mock-KO_all_genes.txt"), 
      out_dir = paste0(out_dir,"Mock.KO/"),
      contrast_id = "Mock.KO")
 
 #WT vs KO
+print("**WT v KO")
 main_function(deg_file = paste0(deg_dir, "DEG_WT-KO_0.5_0.5/limma_DEG_WT-KO_all_genes.txt"), 
      out_dir = paste0(out_dir,"WT.KO/"),
      contrast_id = "WT.KO")
 
 #Y318A vs KO
+print("**Y318A v KO")
 main_function(deg_file = paste0(deg_dir, "DEG_Y318A-KO_0.5_0.5/limma_DEG_Y318A-KO_all_genes.txt"), 
      out_dir = paste0(out_dir,"Y318A.KO/"),
      contrast_id = "Y318A.KO")
@@ -364,3 +368,124 @@ gsea_plus_heatplot(contrast_list = contrast_list,
                    annotation_df = annotation_df)
 
 ```
+
+#####################################
+# KMeans analysis for group A only
+#####################################
+```{r}
+deg_list = c(paste0(deg_dir, "DEG_Mock-KO_0.5_0.5/limma_DEG_Mock-KO_all_genes.txt"),
+                                paste0(deg_dir, "DEG_WT-KO_0.5_0.5/limma_DEG_WT-KO_all_genes.txt"),
+                                paste0(deg_dir, "DEG_Y318A-KO_0.5_0.5/limma_DEG_Y318A-KO_all_genes.txt"))
+contrast_list = c("Mock.KO","WT.KO","Y318A.KO")
+
+#created merged df
+counter=1
+remove(merged_df)
+for (deg in deg_list){
+  tmp_df = read.csv(deg,sep="\t")[,c("ensid_gene","pvalue","gsea_ranking_score")]
+  tmp_df = tmp_df %>%
+    separate(ensid_gene, c("eid", "gene"), "\\|")
+  
+  tmp_df$eid2 = tmp_df$eid
+  tmp_df = tmp_df %>%
+    separate(eid2, c("eid2", "sub"), "\\.")
+  tmp_df$contrast = contrast_list[counter]
+  counter=counter+1
+  
+  #save final df
+  if(exists("merged_df")){
+      merged_df = merge(merged_df,tmp_df,all=TRUE)
+    } else {
+      merged_df=tmp_df
+    }
+}
+remove(tmp_df)
+
+#input file from output of http://bioinformatics.sdstate.edu/idep/
+km_df = read.csv("~/../../Volumes/projects/ccbr1066/analysis/kmeans/Kmeans_bygroup.csv")
+km_df = subset(km_df,Cluster=="A")
+km_df = km_df[,c("Eid","Symbol","MockKOfc","WTKOfc","Y318AKOfc")]
+km_df[is.na(km_df)] <- ""
+
+#add variant info, pvalue to keg output
+for(rowid in rownames(km_df)){
+  search_eid = subset(merged_df,eid==km_df[rowid,"Eid"])$gene[1]
+  search_eid2 = subset(merged_df,eid2==km_df[rowid,"Eid"])$gene[1]
+  
+  if(is.na(search_eid)){
+    km_df[rowid,"Variant"] = subset(merged_df,eid2==km_df[rowid,"Eid"])$gene[1]
+    
+    mock_p = subset(merged_df,eid2==km_df[rowid,"Eid"] & contrast=="Mock.KO")$pvalue
+    wt_p = subset(merged_df,eid2==km_df[rowid,"Eid"] & contrast=="WT.KO")$pvalue
+    y_p = subset(merged_df,eid2==km_df[rowid,"Eid"] & contrast=="Y318A.KO")$pvalue
+    
+    if(length(mock_p)!=0){
+      km_df[rowid,"Mock.KO.p"] = mock_p
+    }
+    
+    if(length(wt_p)!=0){
+      km_df[rowid,"WT.KO.p"] = wt_p
+    }
+    
+    if(length(y_p)!=0){
+      km_df[rowid,"Y318A.KO.p"] = y_p
+    }
+     
+  } else{
+    km_df[rowid,"Variant"] = subset(merged_df,eid==km_df[rowid,"Eid"])$gene[1]
+    
+    mock_p = subset(merged_df,eid2==km_df[rowid,"Eid"] & contrast=="Mock.KO")$pvalue
+    wt_p = subset(merged_df,eid2==km_df[rowid,"Eid"] & contrast=="WT.KO")$pvalue
+    y_p = subset(merged_df,eid2==km_df[rowid,"Eid"] & contrast=="Y318A.KO")$pvalue
+    
+    if(length(mock_p)!=0){
+      km_df[rowid,"Mock.KO.p"] = mock_p
+    }
+    
+    if(length(wt_p)!=0){
+      km_df[rowid,"WT.KO.p"] = wt_p
+    }
+    
+    if(length(y_p)!=0){
+      km_df[rowid,"Y318A.KO.p"] = y_p
+    }
+  }
+}
+
+#cleanup symbol / variant
+for(rowid in rownames(km_df)){
+  if(km_df[rowid,"Symbol"]==km_df[rowid,"Variant"]){
+    km_df[rowid,"Variant"] = ""
+  } else if (km_df[rowid,"Symbol"]==""){
+    km_df[rowid,"Symbol"] = km_df[rowid,"Variant"]
+    km_df[rowid,"Variant"] = ""
+  }
+}
+
+#fix pvalue na
+km_df[is.na(km_df)] <- "1"
+
+#rename
+km_df = km_df %>%
+  rename(
+    Mock.KO.fc = MockKOfc,
+    WT.KO.fc = WTKOfc,
+    Y318A.KO.fc = Y318AKOfc,
+    Gene_Transcript = Symbol
+  )
+
+#reorder 
+km_df_out = km_df[,c("Eid","Gene_Transcript","Variant",
+                           "Mock.KO.fc","Mock.KO.p",
+                           "WT.KO.fc","WT.KO.p",
+                           "Y318A.KO.fc","Y318A.KO.p")]
+
+#subset sig genes in all comparisons
+km_df_sig = subset(km_df_out,Mock.KO.p<0.05 & WT.KO.p < 0.05 & Y318A.KO.p < 0.05)
+
+#save files
+out_dir = "~/../../Volumes/projects/ccbr1066/analysis/kmeans/"
+write.csv(km_df_out,paste0(out_dir,"kmeans_stats_all.csv"))
+write.csv(km_df_sig,paste0(out_dir,"kmeans_stats_sig.csv"))
+```
+
