@@ -77,7 +77,7 @@ ora_plus_plot <- function(gl,t2g,ttl,fn){
   resultdf=as.data.frame(result)
   write.table(resultdf,file=fn,quote=FALSE,sep="\t",row.names = FALSE,col.names = TRUE)
   
-  if(nrow(result)==0){
+  if(nrow(resultdf)==0){
     print("No sig results for ORA")
     p1 = ggparagraph(
       paste0("\n\n\n No Sig Results"),
@@ -93,11 +93,18 @@ ora_plus_plot <- function(gl,t2g,ttl,fn){
   return(p1)
 }
 
-save_plots<-function(p1,p2,contrast_id,file_name){
-  mypdf <- cowplot::plot_grid(p1, p2, ncol=1, labels=LETTERS[1:2])
-  print(mypdf)
-  ggsave(filename = paste(out_dir, contrast_id, "/", contrast_id, file_name, sep=""), 
-         height = 8.90, width = 12.80, device = "png", plot = mypdf)  
+save_plots<-function(p1,p2,p3="",contrast_id,file_name){
+  if(p3=="none"){
+    mypdf <- cowplot::plot_grid(p1, p2, ncol=1, labels=LETTERS[1:2])
+    print(mypdf)
+    ggsave(filename = paste(out_dir, contrast_id, "/", contrast_id, file_name, sep=""), 
+           height = 8.90, width = 12.80, device = "png", plot = mypdf)
+  } else{
+    mypdf <- cowplot::plot_grid(p1, p2, p3, ncol=1, labels=LETTERS[1:3])
+    print(mypdf)
+    ggsave(filename = paste(out_dir, "cluster_", cluster_id, "/", contrast_id, "_",version_id, "/", contrast_id, file_name, sep=""), 
+           height = 8.90, width = 12.80, device = "png", plot = mypdf)
+  }
 }
 
 #for each annotaiton in df, create heatmap for each contrast input
@@ -205,25 +212,6 @@ gsea_plus_heatplot<-function(deg_list, out_dir, contrast_list, annotation_df){
   }
 }
 
-```
-#####################################
-# ORA/GSEA GLOBAL
-#####################################
-```{r}
-#set global variables
-p_val = 0.05
-species = "Homo sapiens"
-fc = 2
-
-#paths
-deg_dir = "~/../../Volumes/projects/ccbr1066/deg_012021/"
-
-```
-
-######################################################################
-# ORA/GSEA Dotplot main code
-######################################################################
-```{r}
 main_function<-function(deg_file,out_dir,contrast_id){
   
   # read deg
@@ -232,11 +220,11 @@ main_function<-function(deg_file,out_dir,contrast_id){
   #create output dir if needed
   dir.create(file.path(out_dir), showWarnings = FALSE)
 
-  #subset significant genes for GSEA
+  #subset significant genes for ORA
   siggenes=deg[deg$fdr <= p_val & (deg$fc < (-1*fc) | deg$fc > fc),]
   sigGeneList=siggenes$gene
   
-  #set genelist for ORA
+  #set genelist for GSEA
   geneList=deg2geneList(deg)
   
   #generate gene lists for C2 with subtypes biocarta, kegg, reactome, wiki
@@ -319,8 +307,13 @@ main_function<-function(deg_file,out_dir,contrast_id){
 # ORA/GSEA Dotplot Run
 #####################################
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
-#output
+#set global variables
+p_val = 0.05
+species = "Homo sapiens"
+fc = 2
+
+#paths
+deg_dir = "~/../../Volumes/projects/ccbr1066/deg_012021/"
 out_dir = "~/../../Volumes/projects/ccbr1066/analysis/ora_vs_gsea/"
 
 #Mock vs KO
@@ -370,25 +363,34 @@ gsea_plus_heatplot(contrast_list = contrast_list,
 ```
 
 #####################################
-# KMeans analysis for group A only
+# Merge DEG for KMeans
 #####################################
 ```{r}
+deg_dir = "~/../../Volumes/projects/ccbr1066/deg_012021/"
+
+#pull in degs
 deg_list = c(paste0(deg_dir, "DEG_Mock-KO_0.5_0.5/limma_DEG_Mock-KO_all_genes.txt"),
                                 paste0(deg_dir, "DEG_WT-KO_0.5_0.5/limma_DEG_WT-KO_all_genes.txt"),
                                 paste0(deg_dir, "DEG_Y318A-KO_0.5_0.5/limma_DEG_Y318A-KO_all_genes.txt"))
 contrast_list = c("Mock.KO","WT.KO","Y318A.KO")
 
-#created merged df
+#created merged df of all degs
 counter=1
-remove(merged_df)
+if(exists("merged_df")){
+  remove(merged_df)
+}
 for (deg in deg_list){
-  tmp_df = read.csv(deg,sep="\t")[,c("ensid_gene","pvalue","gsea_ranking_score")]
-  tmp_df = tmp_df %>%
-    separate(ensid_gene, c("eid", "gene"), "\\|")
+  tmp_df = read.csv(deg,sep="\t")[,c("ensid_gene","pvalue","fdr")]
   
-  tmp_df$eid2 = tmp_df$eid
+  #separate eid and gene
   tmp_df = tmp_df %>%
-    separate(eid2, c("eid2", "sub"), "\\.")
+    separate(ensid_gene, c("eid_complete", "gene"), "\\|")
+
+  #separate eid and version
+  tmp_df$eid_tmp = tmp_df$eid_complete
+  tmp_df = tmp_df %>%
+    separate(eid_tmp, c("eid_partial", "version"), "\\.")
+
   tmp_df$contrast = contrast_list[counter]
   counter=counter+1
   
@@ -399,93 +401,220 @@ for (deg in deg_list){
       merged_df=tmp_df
     }
 }
+
+head(merged_df)
 remove(tmp_df)
 
-#input file from output of http://bioinformatics.sdstate.edu/idep/
-km_df = read.csv("~/../../Volumes/projects/ccbr1066/analysis/kmeans/Kmeans_bygroup.csv")
-km_df = subset(km_df,Cluster=="A")
-km_df = km_df[,c("Eid","Symbol","MockKOfc","WTKOfc","Y318AKOfc")]
-km_df[is.na(km_df)] <- ""
+#generate kmeans clusters at http://bioinformatics.sdstate.edu/idep/
+#input /data/CCBR/projects/ccbr1066/deg_list/merged_deg_limma_012021.txt
+#output K means data buttton, saved to /data/CCBR/projects/ccbr1066/analysis/kmeans/Kmeans_bygroup.csv
+```
 
-#add variant info, pvalue to keg output
-for(rowid in rownames(km_df)){
-  search_eid = subset(merged_df,eid==km_df[rowid,"Eid"])$gene[1]
-  search_eid2 = subset(merged_df,eid2==km_df[rowid,"Eid"])$gene[1]
+# KMeans functions
+```{r}
+#functions
+kmeans_data_prep<-function(kmeans.path,cluster.group,df.in,version.id,out.dir){
   
-  if(is.na(search_eid)){
-    km_df[rowid,"Variant"] = subset(merged_df,eid2==km_df[rowid,"Eid"])$gene[1]
+  #read in kmeans data
+  km_df = read.csv(kmeans.path) 
+  km_df = subset(km_df,Cluster==cluster.group)
+  km_df = km_df[,c("Eid","Symbol","MockKOfc","WTKOfc","Y318AKOfc")]
+  km_df[is.na(km_df)] <- ""
+  
+  #add variant info, pvalue to keg output
+  for(rowid in rownames(km_df)){
+    #pull ids from the merged df either the Ensembl with (complete) or without (partial) version number
+    search_eid = subset(df.in,eid_complete==km_df[rowid,"Eid"])$gene[1]
+    search_eid2 = subset(df.in,eid_partial==km_df[rowid,"Eid"])$gene[1]
     
-    mock_p = subset(merged_df,eid2==km_df[rowid,"Eid"] & contrast=="Mock.KO")$pvalue
-    wt_p = subset(merged_df,eid2==km_df[rowid,"Eid"] & contrast=="WT.KO")$pvalue
-    y_p = subset(merged_df,eid2==km_df[rowid,"Eid"] & contrast=="Y318A.KO")$pvalue
-    
-    if(length(mock_p)!=0){
-      km_df[rowid,"Mock.KO.p"] = mock_p
+    #set lookup column
+    if(is.na(search_eid)){
+      lookup_key = "eid_partial"
+    } else{
+      lookup_key = "eid_complete"
     }
     
-    if(length(wt_p)!=0){
-      km_df[rowid,"WT.KO.p"] = wt_p
-    }
+    #add variant id 
+    km_df[rowid,"Variant"] = subset(df.in,get(lookup_key)==km_df[rowid,"Eid"])$gene[1]
+      
+    #find pvalues for each comparison
+    contrast_list = c("Mock.KO","WT.KO","Y318A.KO")
     
-    if(length(y_p)!=0){
-      km_df[rowid,"Y318A.KO.p"] = y_p
-    }
-     
-  } else{
-    km_df[rowid,"Variant"] = subset(merged_df,eid==km_df[rowid,"Eid"])$gene[1]
-    
-    mock_p = subset(merged_df,eid2==km_df[rowid,"Eid"] & contrast=="Mock.KO")$pvalue
-    wt_p = subset(merged_df,eid2==km_df[rowid,"Eid"] & contrast=="WT.KO")$pvalue
-    y_p = subset(merged_df,eid2==km_df[rowid,"Eid"] & contrast=="Y318A.KO")$pvalue
-    
-    if(length(mock_p)!=0){
-      km_df[rowid,"Mock.KO.p"] = mock_p
-    }
-    
-    if(length(wt_p)!=0){
-      km_df[rowid,"WT.KO.p"] = wt_p
-    }
-    
-    if(length(y_p)!=0){
-      km_df[rowid,"Y318A.KO.p"] = y_p
+    for (contrast_id in contrast_list){
+      pvalue = subset(df.in, get(lookup_key)==km_df[rowid,"Eid"] & contrast==contrast_id)$pvalue
+      fdr = subset(df.in, get(lookup_key)==km_df[rowid,"Eid"] & contrast==contrast_id)$fdr
+  
+      #if there is a pvalue, add it to the df
+      if(length(pvalue)!=0){
+        km_df[rowid,paste0(contrast_id,".p")] = pvalue
+      }
+      #if there is an fdr value, add it to the df
+      if(length(fdr)!=0){
+        km_df[rowid,paste0(contrast_id,".fdr")] = fdr
+      }
     }
   }
-}
 
-#cleanup symbol / variant
-for(rowid in rownames(km_df)){
-  if(km_df[rowid,"Symbol"]==km_df[rowid,"Variant"]){
-    km_df[rowid,"Variant"] = ""
-  } else if (km_df[rowid,"Symbol"]==""){
-    km_df[rowid,"Symbol"] = km_df[rowid,"Variant"]
-    km_df[rowid,"Variant"] = ""
+  #cleanup symbol / variant
+  for(rowid in rownames(km_df)){
+    #if the symbol and variant are the same, remove variant
+    if(km_df[rowid,"Symbol"]==km_df[rowid,"Variant"]){
+      km_df[rowid,"Variant"] = ""
+      
+      #if there is no symbol, add variant to symbol
+    } else if (km_df[rowid,"Symbol"]==""){
+      km_df[rowid,"Symbol"] = km_df[rowid,"Variant"]
+      km_df[rowid,"Variant"] = ""
+    }
   }
+  
+  #fix pvalue na
+  km_df[is.na(km_df)] <- "1"
+  
+  #rename headers
+  km_df = km_df %>%
+    rename(
+      Mock.KO.fc = MockKOfc,
+      WT.KO.fc = WTKOfc,
+      Y318A.KO.fc = Y318AKOfc,
+      Gene_Transcript = Symbol
+    )
+  
+  #reorder columns
+  km_df_out = km_df[,c("Eid","Gene_Transcript","Variant",
+                             "Mock.KO.fc","Mock.KO.p","Mock.KO.fdr",
+                             "WT.KO.fc","WT.KO.p","WT.KO.fdr",
+                             "Y318A.KO.fc","Y318A.KO.p","Y318A.KO.fdr")]
+  #subset sig genes in all comparisons
+  km_df_sig = subset(km_df_out,Mock.KO.p<0.05 & WT.KO.p < 0.05 & Y318A.KO.p < 0.05)
+  
+  #save files
+  out_path = paste0(out.dir,"cluster_",cluster.group)
+  print(paste0("Saving output to ",out_path))
+  dir.create(file.path(out_path), showWarnings = FALSE)
+  
+  write.csv(km_df_out,paste0(out_path,"/kmeans_stats_all_",version.id,".csv"))
+  write.csv(km_df_sig,paste0(out_path,"/kmeans_stats_sig_",version.id,".csv"))
+  
+  #return df
+  return(km_df_out)
 }
 
-#fix pvalue na
-km_df[is.na(km_df)] <- "1"
+ora_function<-function(deg.file,out.dir,contrast.id){
+  
+  # read deg
+  deg=deg.file
+  
+  #create output dir if needed
+  dir.create(file.path(out.dir), showWarnings = FALSE)
 
-#rename
-km_df = km_df %>%
-  rename(
-    Mock.KO.fc = MockKOfc,
-    WT.KO.fc = WTKOfc,
-    Y318A.KO.fc = Y318AKOfc,
-    Gene_Transcript = Symbol
-  )
+  #subset significant genes for GSEA
+  siggenes=deg[deg$fdr <= p_val & (deg$fc < (-1*fc) | deg$fc > fc),]
+  sigGeneList=siggenes$gene
+  
+  #generate gene lists for C2 with subtypes biocarta, kegg, reactome, wiki
+  c2b=msigdbr(species = species, category = "C2", subcategory = "BIOCARTA") %>% 
+    dplyr::select(gs_name,gene_symbol)
+  
+  c2k=msigdbr(species = species, category = "C2", subcategory = "KEGG") %>% 
+    dplyr::select(gs_name,gene_symbol)
+  
+  c2r=msigdbr(species = species, category = "C2", subcategory = "REACTOME") %>%
+    dplyr::select(gs_name,gene_symbol)
+  
+  c2w=msigdbr(species = species, category = "C2", subcategory = "WIKIPATHWAYS") %>%
+    dplyr::select(gs_name,gene_symbol)
+  
+  #generate gene lists for C5 with subtypes MF, BP, CC
+  c5gomf=msigdbr(species = species,  category = "C5", subcategory = "GO:MF") %>% dplyr::select(gs_name,gene_symbol)
+  c5gobp=msigdbr(species = species,  category = "C5", subcategory = "GO:BP") %>% dplyr::select(gs_name,gene_symbol)
+  c5gocc=msigdbr(species = species,  category = "C5", subcategory = "GO:CC") %>% dplyr::select(gs_name,gene_symbol)
+  
+  ## C2:BIOCARTA
+  print("Results for BIOCARTA")
+  p1 = ora_plus_plot(gl=sigGeneList,t2g=c2b,ttl=paste0("ORA:C2:BIOCARTA - ",contrast.id),
+                     fn=paste(out.dir,contrast.id,".c2b.ora.results.txt",sep=""))
 
-#reorder 
-km_df_out = km_df[,c("Eid","Gene_Transcript","Variant",
-                           "Mock.KO.fc","Mock.KO.p",
-                           "WT.KO.fc","WT.KO.p",
-                           "Y318A.KO.fc","Y318A.KO.p")]
+  ## C2:KEGG
+  print("Results for KEGG")
+  p2 = ora_plus_plot(gl=sigGeneList,t2g=c2k,ttl=paste0("ORA:C2:KEGG - ",contrast.id),
+                     fn=paste(out.dir,contrast.id,".c2k.ora.results.txt",sep=""))
 
-#subset sig genes in all comparisons
-km_df_sig = subset(km_df_out,Mock.KO.p<0.05 & WT.KO.p < 0.05 & Y318A.KO.p < 0.05)
+  ## C2:REACTOME
+  print("Results for REACTOME")
+  p3 = ora_plus_plot(gl=sigGeneList,t2g=c2r,ttl=paste0("ORA:C2:REACTOME - ",contrast.id),
+                     fn=paste(out.dir,contrast.id,".c2r.ora.results.txt",sep=""))
 
-#save files
+  save_plots(p1,p2,p3,contrast.id,".c2bkr.dotplot.png")
+  
+  ## C5:GO:MF
+  print("Results for GO:MF")
+  p1 = ora_plus_plot(gl=sigGeneList,t2g=c5gomf,ttl=paste0("ORA:GO:MF - ",contrast.id),
+                   fn=paste(out.dir,contrast.id,".c5gomf.ora.results.txt",sep=""))
+
+  ## C5:GO:BP
+  print("Results for GO:BP")
+  p2 = ora_plus_plot(gl=sigGeneList,t2g=c5gobp,ttl=paste0("ORA:GO:BP - ",contrast.id),
+                   fn=paste(out.dir,contrast.id,".c5gobp.ora.results.txt",sep=""))
+
+  ## C5:GO:CC
+  print("Results for GO:CC")
+  p3 = ora_plus_plot(gl=sigGeneList,t2g=c5gocc,ttl=paste0("ORA:GO:CC - ",contrast.id),
+                   fn=paste(out.dir,contrast.id,".c5gocc.ora.results.txt",sep=""))
+
+  save_plots(p1,p2,p3,contrast.id,".c2go.dotplot.png")
+
+}
+```
+
+
+#####################################
+# ORA on KMeans clusters
+#####################################
+```{r}
+#user parameters
+version_id = "v91"
+p_val = 0.05
+species = "Homo sapiens"
+fc = 2
 out_dir = "~/../../Volumes/projects/ccbr1066/analysis/kmeans/"
-write.csv(km_df_out,paste0(out_dir,"kmeans_stats_all.csv"))
-write.csv(km_df_sig,paste0(out_dir,"kmeans_stats_sig.csv"))
+
+#contrast lists
+cluster_list=c("A","B")
+contrast_list=c("Mock.KO","Y318A.KO","WT.KO")
+
+#pull kmeans
+kmeans_input = paste0("~/../../Volumes/projects/ccbr1066/analysis/kmeans/Kmeans_bygroup_",version_id,".csv")
+
+#for each cluster
+for (cluster_id in cluster_list){
+  #merge kmeans with degs
+  km_means_out = kmeans_data_prep(kmeans_input,cluster_id,merged_df,version_id,out_dir)
+  head(km_means_out)
+  
+  #run ORA plots for each contrast
+  for (contrast in contrast_list){
+    
+    #subset df for specific contrast
+    df_in = km_means_out[,c("Gene_Transcript",paste0(contrast,".fc"),paste0(contrast,".p"),paste0(contrast,".fdr"))]
+    head(df_in)
+    
+    #rename subset to match expected input into ora
+    df_in = df_in %>%
+      rename(
+        fc = paste0(contrast,".fc"),
+        pvalue = paste0(contrast,".p"),
+        fdr = paste0(contrast,".fdr"),
+        gene = Gene_Transcript
+      )
+  
+    print("**************")
+    print(contrast)
+    ora_function(deg.file = df_in, 
+       out.dir = paste0(out_dir,"cluster_",cluster_id,"/",contrast,"_",version_id,"/"),
+       contrast.id = contrast)
+  }
+}
+
 ```
 
