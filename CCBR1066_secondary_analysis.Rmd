@@ -500,7 +500,7 @@ kmeans_data_prep<-function(kmeans.path,cluster.group,df.in,version.id,out.dir){
   return(km_df_out)
 }
 
-ora_function<-function(deg.file,out.dir,contrast.id){
+ora_function<-function(deg.file,out.dir,contrast.id, cluster.id){
   
   # read deg
   deg=deg.file
@@ -532,34 +532,40 @@ ora_function<-function(deg.file,out.dir,contrast.id){
   
   ## C2:BIOCARTA
   print("Results for BIOCARTA")
-  p1 = ora_plus_plot(gl=sigGeneList,t2g=c2b,ttl=paste0("ORA:C2:BIOCARTA - ",contrast.id),
+  p1 = ora_plus_plot(gl=sigGeneList,t2g=c2b,
+                     ttl=paste0("ORA:C2:BIOCARTA - ",contrast.id, " for cluster", cluster.id),
                      fn=paste(out.dir,contrast.id,".c2b.ora.results.txt",sep=""))
 
   ## C2:KEGG
   print("Results for KEGG")
-  p2 = ora_plus_plot(gl=sigGeneList,t2g=c2k,ttl=paste0("ORA:C2:KEGG - ",contrast.id),
+  p2 = ora_plus_plot(gl=sigGeneList,t2g=c2k,
+                     ttl=paste0("ORA:C2:KEGG - ",contrast.id, " for cluster", cluster.id),
                      fn=paste(out.dir,contrast.id,".c2k.ora.results.txt",sep=""))
 
   ## C2:REACTOME
   print("Results for REACTOME")
-  p3 = ora_plus_plot(gl=sigGeneList,t2g=c2r,ttl=paste0("ORA:C2:REACTOME - ",contrast.id),
+  p3 = ora_plus_plot(gl=sigGeneList,t2g=c2r,
+                     ttl=paste0("ORA:C2:REACTOME - ",contrast.id, " for cluster", cluster.id),
                      fn=paste(out.dir,contrast.id,".c2r.ora.results.txt",sep=""))
 
   save_plots(p1,p2,p3,contrast.id,".c2bkr.dotplot.png")
   
   ## C5:GO:MF
   print("Results for GO:MF")
-  p1 = ora_plus_plot(gl=sigGeneList,t2g=c5gomf,ttl=paste0("ORA:GO:MF - ",contrast.id),
+  p1 = ora_plus_plot(gl=sigGeneList,t2g=c5gomf,
+                     ttl=paste0("ORA:GO:MF - ",contrast.id, " for cluster", cluster.id),
                    fn=paste(out.dir,contrast.id,".c5gomf.ora.results.txt",sep=""))
 
   ## C5:GO:BP
   print("Results for GO:BP")
-  p2 = ora_plus_plot(gl=sigGeneList,t2g=c5gobp,ttl=paste0("ORA:GO:BP - ",contrast.id),
+  p2 = ora_plus_plot(gl=sigGeneList,t2g=c5gobp,
+                     ttl=paste0("ORA:GO:BP - ",contrast.id, " for cluster", cluster.id),
                    fn=paste(out.dir,contrast.id,".c5gobp.ora.results.txt",sep=""))
 
   ## C5:GO:CC
   print("Results for GO:CC")
-  p3 = ora_plus_plot(gl=sigGeneList,t2g=c5gocc,ttl=paste0("ORA:GO:CC - ",contrast.id),
+  p3 = ora_plus_plot(gl=sigGeneList,t2g=c5gocc,
+                     ttl=paste0("ORA:GO:CC - ",contrast.id, " for cluster", cluster.id),
                    fn=paste(out.dir,contrast.id,".c5gocc.ora.results.txt",sep=""))
 
   save_plots(p1,p2,p3,contrast.id,".c2go.dotplot.png")
@@ -573,7 +579,7 @@ ora_function<-function(deg.file,out.dir,contrast.id){
 #####################################
 ```{r}
 #user parameters
-version_id = "v91"
+version_id = "v93"
 p_val = 0.05
 species = "Homo sapiens"
 fc = 2
@@ -612,7 +618,8 @@ for (cluster_id in cluster_list){
     print(contrast)
     ora_function(deg.file = df_in, 
        out.dir = paste0(out_dir,"cluster_",cluster_id,"/",contrast,"_",version_id,"/"),
-       contrast.id = contrast)
+       contrast.id = contrast,
+       cluster.id = cluster_id)
   }
 }
 
